@@ -12,9 +12,38 @@ function readEnv(name: string, fallback?: string) {
   return value;
 }
 
+function parseBoolean(value: string | undefined, fallback: boolean) {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+
+  return value.trim().toLowerCase() === 'true';
+}
+
+function parseOrigins() {
+  const singleOrigin = process.env.FRONTEND_URL?.trim();
+  const multiOriginsRaw = process.env.FRONTEND_URLS?.trim();
+
+  const combined = [
+    ...(singleOrigin ? [singleOrigin] : []),
+    ...(multiOriginsRaw
+      ? multiOriginsRaw
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [])
+  ];
+
+  return Array.from(new Set(combined));
+}
+
 export const env = {
-  port: Number(readEnv('PORT', '4000')),
+  port: Number(process.env.PORT || '4000'),
   apiPrefix: readEnv('API_PREFIX', '/api'),
-  frontendUrl: readEnv('FRONTEND_URL', 'http://localhost:3000'),
-  nodeEnv: readEnv('NODE_ENV', 'development')
+  nodeEnv: readEnv('NODE_ENV', 'development'),
+  allowedOrigins: parseOrigins(),
+  allowVercelPreviewDomains: parseBoolean(
+    process.env.ALLOW_VERCEL_PREVIEW_DOMAINS,
+    true
+  )
 };
