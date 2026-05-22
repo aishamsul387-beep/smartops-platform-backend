@@ -16,6 +16,7 @@ import { getBearerToken } from './common/auth/token';
 import { inventoryRouter } from './modules/inventory/routes';
 import { warehouseRouter } from './modules/warehouse/routes';
 import { tasksRouter } from './modules/tasks/routes';
+import { ordersRouter } from './modules/orders/routes';
 import {
   getDemoAccounts,
   getSessionDebug,
@@ -70,6 +71,23 @@ app.use(
 );
 
 app.use(express.json({ limit: '1mb' }));
+
+app.get('/', (_request, response) => {
+  return ok(
+    response,
+    {
+      status: 'ok',
+      app: 'smartops-supply-web-backend',
+      message: 'SmartOps backend is live. Use /api/health for API health check.',
+      time: new Date().toISOString()
+    },
+    200
+  );
+});
+
+app.head('/', (_request, response) => {
+  response.status(200).end();
+});
 
 app.get(`${env.apiPrefix}/health`, (_request, response) => {
   return ok(
@@ -181,6 +199,7 @@ app.post(
 app.use(`${env.apiPrefix}/inventory`, requireAuth, inventoryRouter);
 app.use(`${env.apiPrefix}/warehouse`, requireAuth, warehouseRouter);
 app.use(`${env.apiPrefix}/tasks`, requireAuth, tasksRouter);
+app.use(`${env.apiPrefix}/orders`, requireAuth, ordersRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
