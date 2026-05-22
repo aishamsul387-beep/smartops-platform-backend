@@ -31,9 +31,17 @@ export interface LoginRequestBody {
   password: string;
 }
 
-export interface LoginResponseBody {
+export interface RefreshSessionRequestBody {
+  refreshToken: string;
+}
+
+export interface AuthSessionPayload {
   accessToken: string;
-  refreshToken?: string;
+  refreshToken: string;
   expiresAt: string;
   user: AuthUser;
 }
+
+export interface LoginResponseBody extends AuthSessionPayload {}
+
+export interface RefreshSessionResponseBody extends AuthSessionPayload {}

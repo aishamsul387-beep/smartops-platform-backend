@@ -1,8 +1,9 @@
 import type {
+  AuthSessionPayload,
   AuthUser,
   LoginRequestBody,
-  LoginResponseBody,
   Permission,
+  RefreshSessionResponseBody,
   Role
 } from '../types/auth';
 import { PERMISSIONS } from '../types/auth';
@@ -14,6 +15,13 @@ interface MockAccount {
   password: string;
   role: Role;
   permissions: Permission[];
+}
+
+interface StoredSession {
+  user: AuthUser;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
 }
 
 const rolePermissions: Record<Role, Permission[]> = {
@@ -96,7 +104,8 @@ const mockAccounts: MockAccount[] = [
   }
 ];
 
-const activeTokens = new Map<string, AuthUser>();
+const accessTokenToRefreshToken = new Map<string, string>();
+const refreshTokenToSession = new Map<string, StoredSession>();
 
 function toAuthUser(account: MockAccount): AuthUser {
   return {
@@ -108,12 +117,32 @@ function toAuthUser(account: MockAccount): AuthUser {
   };
 }
 
-function createToken(user: AuthUser) {
-  const raw = `${user.id}:${user.email}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+function createOpaqueToken(prefix: string, user: AuthUser) {
+  const raw = `${prefix}:${user.id}:${user.email}:${Date.now()}:${Math.random()
+    .toString(36)
+    .slice(2)}`;
   return Buffer.from(raw).toString('base64url');
 }
 
-export function loginWithMockAccount(payload: LoginRequestBody): LoginResponseBody | null {
+function buildSessionPayload(user: AuthUser): AuthSessionPayload {
+  const accessToken = createOpaqueToken('access', user);
+  const refreshToken = createOpaqueToken('refresh', user);
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 8).toISOString();
+
+  const storedSession: StoredSession = {
+    user,
+    accessToken,
+    refreshToken,
+    expiresAt
+  };
+
+  accessTokenToRefreshToken.set(accessToken, refreshToken);
+  refreshTokenToSession.set(refreshToken, storedSession);
+
+  return storedSession;
+}
+
+export function loginWithMockAccount(payload: LoginRequestBody): AuthSessionPayload | null {
   const account = mockAccounts.find(
     (item) =>
       item.email.toLowerCase() === payload.email.trim().toLowerCase() &&
@@ -125,16 +154,7 @@ export function loginWithMockAccount(payload: LoginRequestBody): LoginResponseBo
   }
 
   const user = toAuthUser(account);
-  const accessToken = createToken(user);
-
-  activeTokens.set(accessToken, user);
-
-  return {
-    accessToken,
-    refreshToken: `refresh-${accessToken}`,
-    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 8).toISOString(),
-    user
-  };
+  return buildSessionPayload(user);
 }
 
 export function getUserByToken(token: string | null | undefined): AuthUser | null {
@@ -142,15 +162,55 @@ export function getUserByToken(token: string | null | undefined): AuthUser | nul
     return null;
   }
 
-  return activeTokens.get(token) ?? null;
+  const refreshToken = accessTokenToRefreshToken.get(token);
+
+  if (!refreshToken) {
+    return null;
+  }
+
+  const session = refreshTokenToSession.get(refreshToken);
+  return session?.user ?? null;
 }
 
-export function logoutToken(token: string | null | undefined) {
-  if (!token) {
+export function refreshSessionByRefreshToken(
+  refreshToken: string
+): RefreshSessionResponseBody | null {
+  const existing = refreshTokenToSession.get(refreshToken);
+
+  if (!existing) {
+    return null;
+  }
+
+  revokeSessionByRefreshToken(refreshToken);
+  return buildSessionPayload(existing.user);
+}
+
+export function revokeSessionByRefreshToken(refreshToken: string | null | undefined) {
+  if (!refreshToken) {
     return;
   }
 
-  activeTokens.delete(token);
+  const session = refreshTokenToSession.get(refreshToken);
+
+  if (session) {
+    accessTokenToRefreshToken.delete(session.accessToken);
+  }
+
+  refreshTokenToSession.delete(refreshToken);
+}
+
+export function revokeSessionByAccessToken(accessToken: string | null | undefined) {
+  if (!accessToken) {
+    return;
+  }
+
+  const refreshToken = accessTokenToRefreshToken.get(accessToken);
+
+  accessTokenToRefreshToken.delete(accessToken);
+
+  if (refreshToken) {
+    refreshTokenToSession.delete(refreshToken);
+  }
 }
 
 export function getDemoAccounts() {
@@ -159,4 +219,29 @@ export function getDemoAccounts() {
     password: item.password,
     role: item.role
   }));
+}
+
+export function getSessionDebug(token: string | null | undefined) {
+  if (!token) {
+    return null;
+  }
+
+  const refreshToken = accessTokenToRefreshToken.get(token);
+
+  if (!refreshToken) {
+    return null;
+  }
+
+  const session = refreshTokenToSession.get(refreshToken);
+
+  if (!session) {
+    return null;
+  }
+
+  return {
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    expiresAt: session.expiresAt,
+    user: session.user
+  };
 }
