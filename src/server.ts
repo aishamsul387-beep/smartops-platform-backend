@@ -13,10 +13,12 @@ import { validateLoginRequest } from './common/validators/auth-validator';
 import { validateRefreshRequest } from './common/validators/session-validator';
 import { asyncHandler } from './common/utils/async-handler';
 import { getBearerToken } from './common/auth/token';
+import { inventoryRouter } from './modules/inventory/routes';
+import { warehouseRouter } from './modules/warehouse/routes';
+import { tasksRouter } from './modules/tasks/routes';
 import {
   getDemoAccounts,
   getSessionDebug,
-  getUserByToken,
   loginWithMockAccount,
   refreshSessionByRefreshToken,
   revokeSessionByAccessToken
@@ -175,6 +177,10 @@ app.post(
     );
   })
 );
+
+app.use(`${env.apiPrefix}/inventory`, requireAuth, inventoryRouter);
+app.use(`${env.apiPrefix}/warehouse`, requireAuth, warehouseRouter);
+app.use(`${env.apiPrefix}/tasks`, requireAuth, tasksRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
