@@ -17,6 +17,7 @@ import { inventoryRouter } from './modules/inventory/routes';
 import { warehouseRouter } from './modules/warehouse/routes';
 import { tasksRouter } from './modules/tasks/routes';
 import { ordersRouter } from './modules/orders/routes';
+import { uomRouter } from './modules/uom/routes';
 import {
   getDemoAccounts,
   getSessionDebug,
@@ -200,6 +201,7 @@ app.use(`${env.apiPrefix}/inventory`, requireAuth, inventoryRouter);
 app.use(`${env.apiPrefix}/warehouse`, requireAuth, warehouseRouter);
 app.use(`${env.apiPrefix}/tasks`, requireAuth, tasksRouter);
 app.use(`${env.apiPrefix}/orders`, requireAuth, ordersRouter);
+app.use(`${env.apiPrefix}/uom`, requireAuth, uomRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
