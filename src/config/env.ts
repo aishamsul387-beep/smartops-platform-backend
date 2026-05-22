@@ -45,5 +45,6 @@ export const env = {
   allowVercelPreviewDomains: parseBoolean(
     process.env.ALLOW_VERCEL_PREVIEW_DOMAINS,
     true
-  )
+  ),
+  databaseUrl: String(process.env.DATABASE_URL || '').trim()
 };
