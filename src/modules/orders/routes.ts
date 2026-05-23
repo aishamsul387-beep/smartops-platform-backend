@@ -190,10 +190,22 @@ ordersRouter.post(
   '/goods-received-notes',
   asyncHandler(async (request, response) => {
     const poNo = String(request.body?.poNo ?? '').trim();
+    const inventoryItemId = String(request.body?.inventoryItemId ?? '').trim();
     const supplierName = String(request.body?.supplierName ?? '').trim();
+    const batchNumber = String(request.body?.batchNumber ?? '').trim();
+    const lotNumber = String(request.body?.lotNumber ?? '').trim();
+    const supplierLotNumber = String(request.body?.supplierLotNumber ?? '').trim();
+    const manufactureDate = String(request.body?.manufactureDate ?? '').trim() || null;
+    const expiryDate = String(request.body?.expiryDate ?? '').trim() || null;
+    const receivedDate = String(request.body?.receivedDate ?? '').trim() || null;
     const receivedLines = Number(request.body?.receivedLines);
     const receivedQty = Number(request.body?.receivedQty);
     const status = String(request.body?.status ?? '').trim() as GRNStatus;
+    const warehouseLocation = String(request.body?.warehouseLocation ?? '').trim();
+    const zone = String(request.body?.zone ?? '').trim();
+    const aisle = String(request.body?.aisle ?? '').trim();
+    const levelCode = String(request.body?.levelCode ?? '').trim();
+    const bin = String(request.body?.bin ?? '').trim();
 
     if (!poNo) {
       throw new AppError({
@@ -203,11 +215,27 @@ ordersRouter.post(
       });
     }
 
+    if (!inventoryItemId) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'inventoryItemId is required'
+      });
+    }
+
     if (!supplierName) {
       throw new AppError({
         status: 400,
         code: 'VALIDATION_ERROR',
         message: 'supplierName is required'
+      });
+    }
+
+    if (!batchNumber) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'batchNumber is required'
       });
     }
 
@@ -235,12 +263,24 @@ ordersRouter.post(
       });
     }
 
-    const item = createGRN({
+    const item = await createGRN({
       poNo,
+      inventoryItemId,
       supplierName,
+      batchNumber,
+      lotNumber,
+      supplierLotNumber,
+      manufactureDate,
+      expiryDate,
+      receivedDate,
       receivedLines,
       receivedQty,
-      status
+      status,
+      warehouseLocation,
+      zone,
+      aisle,
+      levelCode,
+      bin
     });
 
     return created(response, item);

@@ -1,3 +1,5 @@
+import { createBatch, type BatchStatus } from '../batches/repository';
+
 export type QuotationStatus = 'draft' | 'sent' | 'approved' | 'rejected';
 export type PurchaseOrderStatus = 'draft' | 'issued' | 'partially_received' | 'received';
 export type GRNStatus = 'draft' | 'posted';
@@ -30,11 +32,31 @@ export interface GRNRecord {
   id: string;
   grnNo: string;
   poNo: string;
+  inventoryItemId: string;
   supplierName: string;
+  batchNumber: string;
+  lotNumber: string;
+  supplierLotNumber: string;
+  manufactureDate: string | null;
+  expiryDate: string | null;
+  receivedDate: string | null;
   receivedLines: number;
   receivedQty: number;
   status: GRNStatus;
+  warehouseLocation: string;
+  zone: string;
+  aisle: string;
+  levelCode: string;
+  bin: string;
+  linkedBatchId: string | null;
   postedAt: string;
+}
+
+export interface OrdersDashboardSummary {
+  quotations: number;
+  purchaseOrders: number;
+  goodsReceivedNotes: number;
+  pendingReceipts: number;
 }
 
 export interface CreatePurchaseOrderInput {
@@ -43,19 +65,31 @@ export interface CreatePurchaseOrderInput {
   itemCount: number;
   totalAmount: number;
   currency: string;
-  status: PurchaseOrderStatus;
   expectedDate: string;
+  status: PurchaseOrderStatus;
 }
 
 export interface CreateGRNInput {
   poNo: string;
+  inventoryItemId: string;
   supplierName: string;
+  batchNumber: string;
+  lotNumber: string;
+  supplierLotNumber: string;
+  manufactureDate: string | null;
+  expiryDate: string | null;
+  receivedDate: string | null;
   receivedLines: number;
   receivedQty: number;
   status: GRNStatus;
+  warehouseLocation: string;
+  zone: string;
+  aisle: string;
+  levelCode: string;
+  bin: string;
 }
 
-const quotationStore: QuotationRecord[] = [
+const MOCK_QUOTATIONS: QuotationRecord[] = [
   {
     id: 'qt-001',
     quotationNo: 'QT-2026-001',
@@ -131,21 +165,47 @@ let grnStore: GRNRecord[] = [
   {
     id: 'grn-001',
     grnNo: 'GRN-2026-001',
-    poNo: 'PO-2026-002',
-    supplierName: 'PackRight Industries',
+    poNo: 'PO-2026-001',
+    inventoryItemId: 'inv-001',
+    supplierName: 'Prime Steel Supply',
+    batchNumber: 'BATCH-STEEL-001',
+    lotNumber: 'LOT-STEEL-001',
+    supplierLotNumber: 'SUP-LOT-STEEL-001',
+    manufactureDate: null,
+    expiryDate: null,
+    receivedDate: '2026-05-20',
     receivedLines: 1,
-    receivedQty: 35,
+    receivedQty: 240,
     status: 'posted',
+    warehouseLocation: 'A-01-01',
+    zone: 'A',
+    aisle: '01',
+    levelCode: '01',
+    bin: '01',
+    linkedBatchId: 'bat-001',
     postedAt: '2026-05-21T14:30:00.000Z'
   },
   {
     id: 'grn-002',
     grnNo: 'GRN-2026-002',
-    poNo: 'PO-2026-001',
-    supplierName: 'Prime Steel Supply',
-    receivedLines: 0,
-    receivedQty: 0,
+    poNo: 'PO-2026-003',
+    inventoryItemId: 'inv-003',
+    supplierName: 'ValveCore Manufacturing',
+    batchNumber: 'BATCH-VALVE-001',
+    lotNumber: 'LOT-VALVE-001',
+    supplierLotNumber: 'SUP-LOT-VALVE-001',
+    manufactureDate: '2026-04-15',
+    expiryDate: '2027-04-15',
+    receivedDate: '2026-05-18',
+    receivedLines: 1,
+    receivedQty: 30,
     status: 'draft',
+    warehouseLocation: 'C-03-02',
+    zone: 'C',
+    aisle: '03',
+    levelCode: '02',
+    bin: '02',
+    linkedBatchId: null,
     postedAt: '2026-05-21T15:10:00.000Z'
   }
 ];
@@ -168,9 +228,9 @@ function nextGRNNumber() {
   return `GRN-${new Date().getFullYear()}-${String(grnStore.length + 1).padStart(3, '0')}`;
 }
 
-export function getOrdersSummary() {
+export function getOrdersSummary(): OrdersDashboardSummary {
   return {
-    quotations: quotationStore.length,
+    quotations: MOCK_QUOTATIONS.length,
     purchaseOrders: purchaseOrderStore.length,
     goodsReceivedNotes: grnStore.length,
     pendingReceipts: purchaseOrderStore.filter(
@@ -180,7 +240,7 @@ export function getOrdersSummary() {
 }
 
 export function listQuotations(filters?: { search?: string; status?: string }) {
-  return quotationStore.filter((item) => {
+  return MOCK_QUOTATIONS.filter((item) => {
     const okSearch = matchesSearch(
       [item.quotationNo, item.supplierName, item.status],
       filters?.search
@@ -232,7 +292,16 @@ export function createPurchaseOrder(input: CreatePurchaseOrderInput) {
 export function listGRNs(filters?: { search?: string; status?: string }) {
   return grnStore.filter((item) => {
     const okSearch = matchesSearch(
-      [item.grnNo, item.poNo, item.supplierName, item.status],
+      [
+        item.grnNo,
+        item.poNo,
+        item.inventoryItemId,
+        item.supplierName,
+        item.batchNumber,
+        item.lotNumber,
+        item.supplierLotNumber,
+        item.status
+      ],
       filters?.search
     );
 
@@ -247,17 +316,61 @@ export function getGRNById(id: string) {
   return grnStore.find((item) => item.id === id) ?? null;
 }
 
-export function createGRN(input: CreateGRNInput) {
+export async function createGRN(input: CreateGRNInput) {
   const record: GRNRecord = {
     id: 'grn-' + Date.now(),
     grnNo: nextGRNNumber(),
     poNo: input.poNo,
+    inventoryItemId: input.inventoryItemId,
     supplierName: input.supplierName,
+    batchNumber: input.batchNumber,
+    lotNumber: input.lotNumber,
+    supplierLotNumber: input.supplierLotNumber,
+    manufactureDate: input.manufactureDate,
+    expiryDate: input.expiryDate,
+    receivedDate: input.receivedDate,
     receivedLines: input.receivedLines,
     receivedQty: input.receivedQty,
     status: input.status,
+    warehouseLocation: input.warehouseLocation,
+    zone: input.zone,
+    aisle: input.aisle,
+    levelCode: input.levelCode,
+    bin: input.bin,
+    linkedBatchId: null,
     postedAt: new Date().toISOString()
   };
+
+  if (record.status === 'posted') {
+    const batch = await createBatch({
+      inventoryItemId: record.inventoryItemId,
+      batchNumber: record.batchNumber,
+      lotNumber: record.lotNumber,
+      supplierLotNumber: record.supplierLotNumber,
+      manufactureDate: record.manufactureDate,
+      expiryDate: record.expiryDate,
+      receivedDate: record.receivedDate,
+      supplierName: record.supplierName,
+      purchaseOrderNo: record.poNo,
+      goodsReceivedNoteNo: record.grnNo,
+      unitCost: 0,
+      currency: 'USD',
+      receivedQty: record.receivedQty,
+      availableQty: record.receivedQty,
+      reservedQty: 0,
+      blockedQty: 0,
+      qaHoldQty: 0,
+      batchStatus: 'available' as BatchStatus,
+      warehouseLocation: record.warehouseLocation,
+      zone: record.zone,
+      aisle: record.aisle,
+      levelCode: record.levelCode,
+      bin: record.bin,
+      notes: `Auto-created from GRN ${record.grnNo}`
+    });
+
+    record.linkedBatchId = batch.id;
+  }
 
   grnStore = [record, ...grnStore];
   return record;
