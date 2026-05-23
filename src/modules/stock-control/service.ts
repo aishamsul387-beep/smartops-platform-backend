@@ -20,6 +20,9 @@ export interface StockControlSummary {
   expiringSoonBatches: number;
   expiredBatches: number;
   reorderCandidates: number;
+  criticalReorderCount: number;
+  highReorderCount: number;
+  mediumReorderCount: number;
 }
 
 export interface StockControlAlert {
@@ -50,6 +53,10 @@ export interface ReorderSuggestion {
   estimatedDaysOfCover: number;
   priority: ReorderPriority;
   reason: string;
+  preferredSupplierName: string;
+  leadTimeDays: number;
+  reorderByDate: string;
+  riskNote: string;
 }
 
 function daysBetween(from: Date, to: Date) {
@@ -102,6 +109,68 @@ function calculateSuggestedOrderQty(
   return Math.ceil(suggestion);
 }
 
+function getLeadTimeDays(category: string) {
+  const normalized = category.trim().toLowerCase();
+
+  if (normalized.includes('raw')) {
+    return 14;
+  }
+
+  if (normalized.includes('pack')) {
+    return 7;
+  }
+
+  if (normalized.includes('finished')) {
+    return 10;
+  }
+
+  return 12;
+}
+
+function getPreferredSupplierName(inventoryItemId: string, fallback = 'Unassigned supplier') {
+  return fallbackMap[inventoryItemId] || fallback;
+}
+
+let fallbackMap: Record<string, string> = {};
+
+function buildSupplierFallbackMap(batchSupplierPairs: { inventoryItemId: string; supplierName: string; updatedAt: string }[]) {
+  const sorted = [...batchSupplierPairs].sort((a, b) => {
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  const map: Record<string, string> = {};
+
+  for (const item of sorted) {
+    if (!map[item.inventoryItemId] && item.supplierName.trim()) {
+      map[item.inventoryItemId] = item.supplierName.trim();
+    }
+  }
+
+  fallbackMap = map;
+}
+
+function buildRiskNote(priority: ReorderPriority, daysOfCover: number, leadTimeDays: number) {
+  if (priority === 'critical') {
+    return 'Immediate shortage risk. Procurement action required now.';
+  }
+
+  if (priority === 'high') {
+    return 'Stock is below minimum level and may not cover expected demand safely.';
+  }
+
+  if (daysOfCover < leadTimeDays) {
+    return 'Projected cover is below lead time. Order should be placed early.';
+  }
+
+  return 'Monitor and replenish within normal planning cycle.';
+}
+
+function formatReorderByDate(daysUntilOrder: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + Math.max(daysUntilOrder, 0));
+  return date.toISOString().slice(0, 10);
+}
+
 export async function getStockControlSummary(): Promise<StockControlSummary> {
   const inventory = await listInventory({ status: 'all', search: '' });
   const batches = await listBatches({ status: 'all', search: '' });
@@ -144,6 +213,14 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
 
   const totalOnHandQty = inventory.reduce((sum, item) => sum + item.quantity, 0);
 
+  const reorderSuggestions = inventory
+    .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
+    .map((item) => decidePriority(item.quantity, item.reorderLevel, item.minimumStockLevel));
+
+  const criticalReorderCount = reorderSuggestions.filter((p) => p === 'critical').length;
+  const highReorderCount = reorderSuggestions.filter((p) => p === 'high').length;
+  const mediumReorderCount = reorderSuggestions.filter((p) => p === 'medium').length;
+
   return {
     totalItems: inventory.length,
     totalOnHandQty,
@@ -152,7 +229,10 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
     overstockItems,
     expiringSoonBatches,
     expiredBatches,
-    reorderCandidates
+    reorderCandidates,
+    criticalReorderCount,
+    highReorderCount,
+    mediumReorderCount
   };
 }
 
@@ -255,6 +335,15 @@ export async function getStockControlAlerts(): Promise<StockControlAlert[]> {
 
 export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
   const inventory = await listInventory({ status: 'all', search: '' });
+  const batches = await listBatches({ status: 'all', search: '' });
+
+  buildSupplierFallbackMap(
+    batches.map((batch) => ({
+      inventoryItemId: batch.inventoryItemId,
+      supplierName: batch.supplierName,
+      updatedAt: batch.updatedAt
+    }))
+  );
 
   const suggestions = inventory
     .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
@@ -278,6 +367,11 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         item.reorderLevel,
         item.minimumStockLevel
       );
+
+      const leadTimeDays = getLeadTimeDays(item.category);
+      const reorderByDate = formatReorderByDate(daysOfCover - leadTimeDays);
+      const preferredSupplierName = getPreferredSupplierName(item.id);
+      const riskNote = buildRiskNote(priority, daysOfCover, leadTimeDays);
 
       let reason = 'Reorder threshold reached.';
 
@@ -303,7 +397,11 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         estimatedDailyUsage: dailyUsage,
         estimatedDaysOfCover: daysOfCover,
         priority,
-        reason
+        reason,
+        preferredSupplierName,
+        leadTimeDays,
+        reorderByDate,
+        riskNote
       };
     });
 
