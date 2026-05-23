@@ -57,6 +57,10 @@ export interface CreateInventoryInput {
   notes: string;
 }
 
+export interface UpdateInventoryInput extends CreateInventoryInput {
+  id: string;
+}
+
 let initialized = false;
 
 let memoryInventoryStore: InventoryRecord[] = [
