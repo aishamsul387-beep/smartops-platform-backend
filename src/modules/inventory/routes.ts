@@ -11,6 +11,7 @@ import {
   updateInventory,
   type InventoryStatus
 } from './repository';
+import { getUomById, listConversionGroups, listUoms } from '../uom/store';
 
 export const inventoryRouter = Router();
 
@@ -74,6 +75,62 @@ function normalizeStatus(value: unknown) {
   return status;
 }
 
+function requireActiveUomCode(value: unknown, field: string) {
+  const code = requireText(value, field, 1, 20).toUpperCase();
+
+  const uom = listUoms({ search: '', type: 'all' }).find(
+    (item) => item.uomCode.toUpperCase() === code
+  );
+
+  if (!uom) {
+    throw new AppError({
+      status: 400,
+      code: 'INVALID_UOM',
+      message: `${field} does not exist`
+    });
+  }
+
+  if (!uom.isActive) {
+    throw new AppError({
+      status: 400,
+      code: 'INACTIVE_UOM',
+      message: `${field} is inactive and cannot be used`
+    });
+  }
+
+  return code;
+}
+
+function optionalActiveConversionGroupCode(value: unknown) {
+  const code = String(value ?? '').trim().toUpperCase();
+
+  if (!code) {
+    return '';
+  }
+
+  const group = listConversionGroups({ search: '' }).find(
+    (item) => item.groupCode.toUpperCase() === code
+  );
+
+  if (!group) {
+    throw new AppError({
+      status: 400,
+      code: 'INVALID_UOM_CONVERSION_GROUP',
+      message: 'uomConversionGroupCode does not exist'
+    });
+  }
+
+  if (!group.isActive) {
+    throw new AppError({
+      status: 400,
+      code: 'INACTIVE_UOM_CONVERSION_GROUP',
+      message: 'uomConversionGroupCode is inactive and cannot be used'
+    });
+  }
+
+  return code;
+}
+
 function buildInventoryInput(body: any) {
   return {
     sku: requireText(body?.sku, 'sku', 2, 50),
@@ -92,11 +149,11 @@ function buildInventoryInput(body: any) {
     isBatchTracked: Boolean(body?.isBatchTracked),
     isExpiryTracked: Boolean(body?.isExpiryTracked),
     isSerialTracked: Boolean(body?.isSerialTracked),
-    baseUomCode: requireText(body?.baseUomCode, 'baseUomCode', 1, 20).toUpperCase(),
-    purchaseUomCode: requireText(body?.purchaseUomCode, 'purchaseUomCode', 1, 20).toUpperCase(),
-    salesUomCode: requireText(body?.salesUomCode, 'salesUomCode', 1, 20).toUpperCase(),
-    issueUomCode: requireText(body?.issueUomCode, 'issueUomCode', 1, 20).toUpperCase(),
-    uomConversionGroupCode: String(body?.uomConversionGroupCode ?? '').trim().toUpperCase(),
+    baseUomCode: requireActiveUomCode(body?.baseUomCode, 'baseUomCode'),
+    purchaseUomCode: requireActiveUomCode(body?.purchaseUomCode, 'purchaseUomCode'),
+    salesUomCode: requireActiveUomCode(body?.salesUomCode, 'salesUomCode'),
+    issueUomCode: requireActiveUomCode(body?.issueUomCode, 'issueUomCode'),
+    uomConversionGroupCode: optionalActiveConversionGroupCode(body?.uomConversionGroupCode),
     allowsFraction: Boolean(body?.allowsFraction),
     notes: String(body?.notes ?? '').trim()
   };
