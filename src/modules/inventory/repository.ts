@@ -488,6 +488,143 @@ export async function createInventory(input: CreateInventoryInput) {
   return record;
 }
 
+export async function updateInventory(input: UpdateInventoryInput) {
+  const updated: InventoryRecord = {
+    id: input.id,
+    sku: input.sku,
+    barcode: input.barcode,
+    name: input.name,
+    description: input.description,
+    category: input.category,
+    quantity: input.quantity,
+    reorderLevel: input.reorderLevel,
+    minimumStockLevel: input.minimumStockLevel,
+    maximumStockLevel: input.maximumStockLevel,
+    unit: input.unit,
+    warehouseLocation: input.warehouseLocation,
+    status: input.status,
+    isActive: input.isActive,
+    isBatchTracked: input.isBatchTracked,
+    isExpiryTracked: input.isExpiryTracked,
+    isSerialTracked: input.isSerialTracked,
+    baseUomCode: input.baseUomCode,
+    purchaseUomCode: input.purchaseUomCode,
+    salesUomCode: input.salesUomCode,
+    issueUomCode: input.issueUomCode,
+    uomConversionGroupCode: input.uomConversionGroupCode,
+    allowsFraction: input.allowsFraction,
+    notes: input.notes,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!isPostgresEnabled()) {
+    const index = memoryInventoryStore.findIndex((item) => item.id === input.id);
+    if (index === -1) {
+      return null;
+    }
+
+    memoryInventoryStore[index] = updated;
+    return updated;
+  }
+
+  await ensureInventoryTable();
+
+  await execute(
+    `
+    UPDATE inventory_items
+    SET
+      sku = $2,
+      barcode = $3,
+      name = $4,
+      description = $5,
+      category = $6,
+      quantity = $7,
+      reorder_level = $8,
+      minimum_stock_level = $9,
+      maximum_stock_level = $10,
+      unit = $11,
+      warehouse_location = $12,
+      status = $13,
+      is_active = $14,
+      is_batch_tracked = $15,
+      is_expiry_tracked = $16,
+      is_serial_tracked = $17,
+      base_uom_code = $18,
+      purchase_uom_code = $19,
+      sales_uom_code = $20,
+      issue_uom_code = $21,
+      uom_conversion_group_code = $22,
+      allows_fraction = $23,
+      notes = $24,
+      updated_at = $25
+    WHERE id = $1
+    `,
+    [
+      updated.id,
+      updated.sku,
+      updated.barcode,
+      updated.name,
+      updated.description,
+      updated.category,
+      updated.quantity,
+      updated.reorderLevel,
+      updated.minimumStockLevel,
+      updated.maximumStockLevel,
+      updated.unit,
+      updated.warehouseLocation,
+      updated.status,
+      updated.isActive,
+      updated.isBatchTracked,
+      updated.isExpiryTracked,
+      updated.isSerialTracked,
+      updated.baseUomCode,
+      updated.purchaseUomCode,
+      updated.salesUomCode,
+      updated.issueUomCode,
+      updated.uomConversionGroupCode,
+      updated.allowsFraction,
+      updated.notes,
+      updated.updatedAt
+    ]
+  );
+
+  return updated;
+}
+
+export async function setInventoryActiveStatus(id: string, isActive: boolean) {
+  if (!isPostgresEnabled()) {
+    const current = memoryInventoryStore.find((item) => item.id === id);
+    if (!current) {
+      return null;
+    }
+
+    const updated: InventoryRecord = {
+      ...current,
+      isActive,
+      updatedAt: new Date().toISOString()
+    };
+
+    const index = memoryInventoryStore.findIndex((item) => item.id === id);
+    memoryInventoryStore[index] = updated;
+    return updated;
+  }
+
+  await ensureInventoryTable();
+
+  await execute(
+    `
+    UPDATE inventory_items
+    SET
+      is_active = $2,
+      updated_at = $3
+    WHERE id = $1
+    `,
+    [id, isActive, new Date().toISOString()]
+  );
+
+  return getInventoryById(id);
+}
+
 export function getInventoryPersistenceMode() {
   return env.databaseUrl ? 'postgres' : 'memory';
 }

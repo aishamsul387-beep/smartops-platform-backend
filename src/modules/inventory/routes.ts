@@ -6,7 +6,10 @@ import {
   createInventory,
   getInventoryById,
   getInventoryPersistenceMode,
-  listInventory
+  listInventory,
+  setInventoryActiveStatus,
+  updateInventory,
+  type InventoryStatus
 } from './repository';
 
 export const inventoryRouter = Router();
@@ -18,6 +21,8 @@ function readSingle(value: string | string[] | undefined) {
 
   return value ?? '';
 }
+
+const allowedStatuses: InventoryStatus[] = ['in_stock', 'low_stock', 'out_of_stock'];
 
 function requireText(value: unknown, field: string, min = 1, max = 150) {
   const text = String(value ?? '').trim();
@@ -53,6 +58,48 @@ function requireNumber(value: unknown, field: string, min = 0) {
   }
 
   return parsed;
+}
+
+function normalizeStatus(value: unknown) {
+  const status = String(value ?? '').trim() as InventoryStatus;
+
+  if (!allowedStatuses.includes(status)) {
+    throw new AppError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message: 'status must be one of: in_stock, low_stock, out_of_stock'
+    });
+  }
+
+  return status;
+}
+
+function buildInventoryInput(body: any) {
+  return {
+    sku: requireText(body?.sku, 'sku', 2, 50),
+    barcode: String(body?.barcode ?? '').trim(),
+    name: requireText(body?.name, 'name', 2, 120),
+    description: String(body?.description ?? '').trim(),
+    category: requireText(body?.category, 'category', 2, 80),
+    quantity: requireNumber(body?.quantity, 'quantity', 0),
+    reorderLevel: requireNumber(body?.reorderLevel, 'reorderLevel', 0),
+    minimumStockLevel: requireNumber(body?.minimumStockLevel, 'minimumStockLevel', 0),
+    maximumStockLevel: requireNumber(body?.maximumStockLevel, 'maximumStockLevel', 0),
+    unit: requireText(body?.unit, 'unit', 1, 20),
+    warehouseLocation: requireText(body?.warehouseLocation, 'warehouseLocation', 3, 30),
+    status: normalizeStatus(body?.status ?? 'in_stock'),
+    isActive: Boolean(body?.isActive),
+    isBatchTracked: Boolean(body?.isBatchTracked),
+    isExpiryTracked: Boolean(body?.isExpiryTracked),
+    isSerialTracked: Boolean(body?.isSerialTracked),
+    baseUomCode: requireText(body?.baseUomCode, 'baseUomCode', 1, 20).toUpperCase(),
+    purchaseUomCode: requireText(body?.purchaseUomCode, 'purchaseUomCode', 1, 20).toUpperCase(),
+    salesUomCode: requireText(body?.salesUomCode, 'salesUomCode', 1, 20).toUpperCase(),
+    issueUomCode: requireText(body?.issueUomCode, 'issueUomCode', 1, 20).toUpperCase(),
+    uomConversionGroupCode: String(body?.uomConversionGroupCode ?? '').trim().toUpperCase(),
+    allowsFraction: Boolean(body?.allowsFraction),
+    notes: String(body?.notes ?? '').trim()
+  };
 }
 
 inventoryRouter.get(
@@ -96,32 +143,50 @@ inventoryRouter.get(
 inventoryRouter.post(
   '/',
   asyncHandler(async (request, response) => {
-    const item = await createInventory({
-      sku: requireText(request.body?.sku, 'sku', 2, 50),
-      barcode: String(request.body?.barcode ?? '').trim(),
-      name: requireText(request.body?.name, 'name', 2, 120),
-      description: String(request.body?.description ?? '').trim(),
-      category: requireText(request.body?.category, 'category', 2, 80),
-      quantity: requireNumber(request.body?.quantity, 'quantity', 0),
-      reorderLevel: requireNumber(request.body?.reorderLevel, 'reorderLevel', 0),
-      minimumStockLevel: requireNumber(request.body?.minimumStockLevel, 'minimumStockLevel', 0),
-      maximumStockLevel: requireNumber(request.body?.maximumStockLevel, 'maximumStockLevel', 0),
-      unit: requireText(request.body?.unit, 'unit', 1, 20),
-      warehouseLocation: requireText(request.body?.warehouseLocation, 'warehouseLocation', 3, 30),
-      status: String(request.body?.status ?? 'in_stock').trim() as any,
-      isActive: Boolean(request.body?.isActive),
-      isBatchTracked: Boolean(request.body?.isBatchTracked),
-      isExpiryTracked: Boolean(request.body?.isExpiryTracked),
-      isSerialTracked: Boolean(request.body?.isSerialTracked),
-      baseUomCode: requireText(request.body?.baseUomCode, 'baseUomCode', 1, 20).toUpperCase(),
-      purchaseUomCode: requireText(request.body?.purchaseUomCode, 'purchaseUomCode', 1, 20).toUpperCase(),
-      salesUomCode: requireText(request.body?.salesUomCode, 'salesUomCode', 1, 20).toUpperCase(),
-      issueUomCode: requireText(request.body?.issueUomCode, 'issueUomCode', 1, 20).toUpperCase(),
-      uomConversionGroupCode: String(request.body?.uomConversionGroupCode ?? '').trim().toUpperCase(),
-      allowsFraction: Boolean(request.body?.allowsFraction),
-      notes: String(request.body?.notes ?? '').trim()
+    const item = await createInventory(buildInventoryInput(request.body));
+    return created(response, item);
+  })
+);
+
+inventoryRouter.put(
+  '/:id',
+  asyncHandler(async (request, response) => {
+    const id = readSingle(request.params.id as string | string[] | undefined);
+
+    const existing = await getInventoryById(id);
+    if (!existing) {
+      throw new AppError({
+        status: 404,
+        code: 'INVENTORY_NOT_FOUND',
+        message: 'Inventory item not found'
+      });
+    }
+
+    const item = await updateInventory({
+      id,
+      ...buildInventoryInput(request.body)
     });
 
-    return created(response, item);
+    return ok(response, item, 200);
+  })
+);
+
+inventoryRouter.patch(
+  '/:id/active',
+  asyncHandler(async (request, response) => {
+    const id = readSingle(request.params.id as string | string[] | undefined);
+    const isActive = Boolean(request.body?.isActive);
+
+    const item = await setInventoryActiveStatus(id, isActive);
+
+    if (!item) {
+      throw new AppError({
+        status: 404,
+        code: 'INVENTORY_NOT_FOUND',
+        message: 'Inventory item not found'
+      });
+    }
+
+    return ok(response, item, 200);
   })
 );
