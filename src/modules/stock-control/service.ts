@@ -9,14 +9,17 @@ export type StockAlertType =
   | 'expired_batch';
 
 export type StockAlertSeverity = 'high' | 'medium' | 'low';
+export type ReorderPriority = 'critical' | 'high' | 'medium' | 'low';
 
 export interface StockControlSummary {
   totalItems: number;
+  totalOnHandQty: number;
   lowStockItems: number;
   outOfStockItems: number;
   overstockItems: number;
   expiringSoonBatches: number;
   expiredBatches: number;
+  reorderCandidates: number;
 }
 
 export interface StockControlAlert {
@@ -32,9 +35,71 @@ export interface StockControlAlert {
   dueDate?: string | null;
 }
 
+export interface ReorderSuggestion {
+  id: string;
+  inventoryItemId: string;
+  itemCode: string;
+  itemName: string;
+  category: string;
+  currentQty: number;
+  reorderLevel: number;
+  minimumStockLevel: number;
+  maximumStockLevel: number;
+  suggestedOrderQty: number;
+  estimatedDailyUsage: number;
+  estimatedDaysOfCover: number;
+  priority: ReorderPriority;
+  reason: string;
+}
+
 function daysBetween(from: Date, to: Date) {
   const ms = to.getTime() - from.getTime();
   return Math.ceil(ms / (1000 * 60 * 60 * 24));
+}
+
+function estimateDailyUsage(quantity: number, reorderLevel: number, minimumStockLevel: number) {
+  const baseline = Math.max(reorderLevel, minimumStockLevel, 1);
+  const estimate = baseline / 30;
+  return Number(estimate.toFixed(2));
+}
+
+function estimateDaysOfCover(quantity: number, dailyUsage: number) {
+  if (dailyUsage <= 0) {
+    return 999;
+  }
+
+  return Math.floor(quantity / dailyUsage);
+}
+
+function decidePriority(
+  quantity: number,
+  reorderLevel: number,
+  minimumStockLevel: number
+): ReorderPriority {
+  if (quantity <= 0) {
+    return 'critical';
+  }
+
+  if (quantity <= minimumStockLevel) {
+    return 'high';
+  }
+
+  if (quantity <= reorderLevel) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function calculateSuggestedOrderQty(
+  quantity: number,
+  reorderLevel: number,
+  minimumStockLevel: number,
+  maximumStockLevel: number
+) {
+  const targetLevel = Math.max(maximumStockLevel, reorderLevel + minimumStockLevel, reorderLevel);
+  const suggestion = Math.max(targetLevel - quantity, 0);
+  return Math.ceil(suggestion);
 }
 
 export async function getStockControlSummary(): Promise<StockControlSummary> {
@@ -73,13 +138,21 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
     return expiry.getTime() < now.getTime();
   }).length;
 
+  const reorderCandidates = inventory.filter(
+    (item) => item.quantity <= item.reorderLevel
+  ).length;
+
+  const totalOnHandQty = inventory.reduce((sum, item) => sum + item.quantity, 0);
+
   return {
     totalItems: inventory.length,
+    totalOnHandQty,
     lowStockItems,
     outOfStockItems,
     overstockItems,
     expiringSoonBatches,
-    expiredBatches
+    expiredBatches,
+    reorderCandidates
   };
 }
 
@@ -178,4 +251,66 @@ export async function getStockControlAlerts(): Promise<StockControlAlert[]> {
 
     return score(b.severity) - score(a.severity);
   });
+}
+
+export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
+  const inventory = await listInventory({ status: 'all', search: '' });
+
+  const suggestions = inventory
+    .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
+    .map((item) => {
+      const dailyUsage = estimateDailyUsage(
+        item.quantity,
+        item.reorderLevel,
+        item.minimumStockLevel
+      );
+
+      const daysOfCover = estimateDaysOfCover(item.quantity, dailyUsage);
+      const suggestedOrderQty = calculateSuggestedOrderQty(
+        item.quantity,
+        item.reorderLevel,
+        item.minimumStockLevel,
+        item.maximumStockLevel
+      );
+
+      const priority = decidePriority(
+        item.quantity,
+        item.reorderLevel,
+        item.minimumStockLevel
+      );
+
+      let reason = 'Reorder threshold reached.';
+
+      if (item.quantity <= 0) {
+        reason = 'Out of stock and requires urgent replenishment.';
+      } else if (item.quantity <= item.minimumStockLevel) {
+        reason = 'Below minimum stock level and should be replenished soon.';
+      } else if (item.quantity <= item.reorderLevel) {
+        reason = 'At or below reorder level based on planning rule.';
+      }
+
+      return {
+        id: `reorder-${item.id}`,
+        inventoryItemId: item.id,
+        itemCode: item.sku,
+        itemName: item.name,
+        category: item.category,
+        currentQty: item.quantity,
+        reorderLevel: item.reorderLevel,
+        minimumStockLevel: item.minimumStockLevel,
+        maximumStockLevel: item.maximumStockLevel,
+        suggestedOrderQty,
+        estimatedDailyUsage: dailyUsage,
+        estimatedDaysOfCover: daysOfCover,
+        priority,
+        reason
+      };
+    });
+
+  const priorityScore = (value: ReorderPriority) =>
+    value === 'critical' ? 4 :
+    value === 'high' ? 3 :
+    value === 'medium' ? 2 : 1;
+
+  return suggestions.sort((a, b) => priorityScore(b.priority) - priorityScore(a.priority));
 }
