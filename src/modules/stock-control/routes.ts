@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { ok } from '../../common/http/api-response';
 import { asyncHandler } from '../../common/utils/async-handler';
 import {
+  getProcurementActionQueue,
   getReorderSuggestions,
   getStockControlAlerts,
   getStockControlSummary
@@ -30,5 +31,13 @@ stockControlRouter.get(
   asyncHandler(async (_request, response) => {
     const suggestions = await getReorderSuggestions();
     return ok(response, suggestions, 200);
+  })
+);
+
+stockControlRouter.get(
+  '/procurement-actions',
+  asyncHandler(async (_request, response) => {
+    const actions = await getProcurementActionQueue();
+    return ok(response, actions, 200);
   })
 );

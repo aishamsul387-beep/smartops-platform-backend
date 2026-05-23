@@ -12,6 +12,7 @@ export type StockAlertSeverity = 'high' | 'medium' | 'low';
 export type ReorderPriority = 'critical' | 'high' | 'medium' | 'low';
 export type DemandTrend = 'rising' | 'stable' | 'falling';
 export type ProcurementAction = 'order_now' | 'order_this_week' | 'monitor';
+export type ProcurementQueueStatus = 'immediate' | 'this_week' | 'monitor';
 
 export interface StockControlSummary {
   totalItems: number;
@@ -28,6 +29,8 @@ export interface StockControlSummary {
   risingDemandItems: number;
   stableDemandItems: number;
   fallingDemandItems: number;
+  procurementDueToday: number;
+  procurementDueThisWeek: number;
 }
 
 export interface StockControlAlert {
@@ -69,6 +72,22 @@ export interface ReorderSuggestion {
   forecastDemand60d: number;
   forecastDemand90d: number;
   procurementAction: ProcurementAction;
+}
+
+export interface ProcurementQueueItem {
+  id: string;
+  inventoryItemId: string;
+  itemCode: string;
+  itemName: string;
+  preferredSupplierName: string;
+  suggestedOrderQty: number;
+  reorderByDate: string;
+  leadTimeDays: number;
+  priority: ReorderPriority;
+  supplierScore: number;
+  procurementAction: ProcurementAction;
+  queueStatus: ProcurementQueueStatus;
+  riskNote: string;
 }
 
 function daysBetween(from: Date, to: Date) {
@@ -249,9 +268,145 @@ function formatReorderByDate(daysUntilOrder: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function daysUntil(dateText: string) {
+  const now = new Date();
+  const target = new Date(dateText);
+  return daysBetween(now, target);
+}
+
+function buildQueueStatus(reorderByDate: string): ProcurementQueueStatus {
+  const days = daysUntil(reorderByDate);
+
+  if (days <= 0) {
+    return 'immediate';
+  }
+
+  if (days <= 7) {
+    return 'this_week';
+  }
+
+  return 'monitor';
+}
+
+export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
+  const inventory = await listInventory({ status: 'all', search: '' });
+  const batches = await listBatches({ status: 'all', search: '' });
+
+  buildSupplierFallbackMap(
+    batches.map((batch) => ({
+      inventoryItemId: batch.inventoryItemId,
+      supplierName: batch.supplierName,
+      updatedAt: batch.updatedAt
+    }))
+  );
+
+  const suggestions = inventory
+    .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
+    .map((item) => {
+      const dailyUsage = estimateDailyUsage(
+        item.quantity,
+        item.reorderLevel,
+        item.minimumStockLevel
+      );
+
+      const daysOfCover = estimateDaysOfCover(item.quantity, dailyUsage);
+      const suggestedOrderQty = calculateSuggestedOrderQty(
+        item.quantity,
+        item.reorderLevel,
+        item.minimumStockLevel,
+        item.maximumStockLevel
+      );
+
+      const priority = decidePriority(
+        item.quantity,
+        item.reorderLevel,
+        item.minimumStockLevel
+      );
+
+      const demandTrend = decideDemandTrend(item);
+      const monthlyUsageEstimate = Math.ceil(dailyUsage * 30 * forecastMultiplier(demandTrend));
+      const forecastDemand30d = estimateForecastDemand(30, monthlyUsageEstimate, demandTrend);
+      const forecastDemand60d = estimateForecastDemand(60, monthlyUsageEstimate, demandTrend);
+      const forecastDemand90d = estimateForecastDemand(90, monthlyUsageEstimate, demandTrend);
+
+      const leadTimeDays = getLeadTimeDays(item.category);
+      const reorderByDate = formatReorderByDate(daysOfCover - leadTimeDays);
+      const preferredSupplierName = getPreferredSupplierName(item.id);
+      const supplierScore = getSupplierScore(preferredSupplierName);
+      const riskNote = buildRiskNote(priority, daysOfCover, leadTimeDays);
+      const procurementAction = buildProcurementAction(priority, daysOfCover, leadTimeDays);
+
+      let reason = 'Reorder threshold reached.';
+
+      if (item.quantity <= 0) {
+        reason = 'Out of stock and requires urgent replenishment.';
+      } else if (item.quantity <= item.minimumStockLevel) {
+        reason = 'Below minimum stock level and should be replenished soon.';
+      } else if (item.quantity <= item.reorderLevel) {
+        reason = 'At or below reorder level based on planning rule.';
+      }
+
+      return {
+        id: `reorder-${item.id}`,
+        inventoryItemId: item.id,
+        itemCode: item.sku,
+        itemName: item.name,
+        category: item.category,
+        currentQty: item.quantity,
+        reorderLevel: item.reorderLevel,
+        minimumStockLevel: item.minimumStockLevel,
+        maximumStockLevel: item.maximumStockLevel,
+        suggestedOrderQty,
+        estimatedDailyUsage: dailyUsage,
+        estimatedDaysOfCover: daysOfCover,
+        priority,
+        reason,
+        preferredSupplierName,
+        supplierScore,
+        leadTimeDays,
+        reorderByDate,
+        riskNote,
+        demandTrend,
+        monthlyUsageEstimate,
+        forecastDemand30d,
+        forecastDemand60d,
+        forecastDemand90d,
+        procurementAction
+      };
+    });
+
+  const priorityScore = (value: ReorderPriority) =>
+    value === 'critical' ? 4 :
+    value === 'high' ? 3 :
+    value === 'medium' ? 2 : 1;
+
+  return suggestions.sort((a, b) => priorityScore(b.priority) - priorityScore(a.priority));
+}
+
+export async function getProcurementActionQueue(): Promise<ProcurementQueueItem[]> {
+  const suggestions = await getReorderSuggestions();
+
+  return suggestions.map((item) => ({
+    id: `queue-${item.inventoryItemId}`,
+    inventoryItemId: item.inventoryItemId,
+    itemCode: item.itemCode,
+    itemName: item.itemName,
+    preferredSupplierName: item.preferredSupplierName,
+    suggestedOrderQty: item.suggestedOrderQty,
+    reorderByDate: item.reorderByDate,
+    leadTimeDays: item.leadTimeDays,
+    priority: item.priority,
+    supplierScore: item.supplierScore,
+    procurementAction: item.procurementAction,
+    queueStatus: buildQueueStatus(item.reorderByDate),
+    riskNote: item.riskNote
+  }));
+}
+
 export async function getStockControlSummary(): Promise<StockControlSummary> {
   const inventory = await listInventory({ status: 'all', search: '' });
   const batches = await listBatches({ status: 'all', search: '' });
+  const reorderSuggestions = await getReorderSuggestions();
 
   const now = new Date();
 
@@ -285,24 +440,20 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
     return expiry.getTime() < now.getTime();
   }).length;
 
-  const reorderCandidates = inventory.filter(
-    (item) => item.quantity <= item.reorderLevel
-  ).length;
-
+  const reorderCandidates = reorderSuggestions.length;
   const totalOnHandQty = inventory.reduce((sum, item) => sum + item.quantity, 0);
 
-  const reorderPriorities = inventory
-    .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
-    .map((item) => decidePriority(item.quantity, item.reorderLevel, item.minimumStockLevel));
+  const criticalReorderCount = reorderSuggestions.filter((p) => p.priority === 'critical').length;
+  const highReorderCount = reorderSuggestions.filter((p) => p.priority === 'high').length;
+  const mediumReorderCount = reorderSuggestions.filter((p) => p.priority === 'medium').length;
 
-  const criticalReorderCount = reorderPriorities.filter((p) => p === 'critical').length;
-  const highReorderCount = reorderPriorities.filter((p) => p === 'high').length;
-  const mediumReorderCount = reorderPriorities.filter((p) => p === 'medium').length;
+  const risingDemandItems = reorderSuggestions.filter((p) => p.demandTrend === 'rising').length;
+  const stableDemandItems = reorderSuggestions.filter((p) => p.demandTrend === 'stable').length;
+  const fallingDemandItems = reorderSuggestions.filter((p) => p.demandTrend === 'falling').length;
 
-  const trends = inventory.map(decideDemandTrend);
-  const risingDemandItems = trends.filter((t) => t === 'rising').length;
-  const stableDemandItems = trends.filter((t) => t === 'stable').length;
-  const fallingDemandItems = trends.filter((t) => t === 'falling').length;
+  const procurementQueue = await getProcurementActionQueue();
+  const procurementDueToday = procurementQueue.filter((q) => q.queueStatus === 'immediate').length;
+  const procurementDueThisWeek = procurementQueue.filter((q) => q.queueStatus === 'this_week').length;
 
   return {
     totalItems: inventory.length,
@@ -318,7 +469,9 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
     mediumReorderCount,
     risingDemandItems,
     stableDemandItems,
-    fallingDemandItems
+    fallingDemandItems,
+    procurementDueToday,
+    procurementDueThisWeek
   };
 }
 
@@ -417,99 +570,4 @@ export async function getStockControlAlerts(): Promise<StockControlAlert[]> {
 
     return score(b.severity) - score(a.severity);
   });
-}
-
-export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
-  const inventory = await listInventory({ status: 'all', search: '' });
-  const batches = await listBatches({ status: 'all', search: '' });
-
-  buildSupplierFallbackMap(
-    batches.map((batch) => ({
-      inventoryItemId: batch.inventoryItemId,
-      supplierName: batch.supplierName,
-      updatedAt: batch.updatedAt
-    }))
-  );
-
-  const suggestions = inventory
-    .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
-    .map((item) => {
-      const dailyUsage = estimateDailyUsage(
-        item.quantity,
-        item.reorderLevel,
-        item.minimumStockLevel
-      );
-
-      const daysOfCover = estimateDaysOfCover(item.quantity, dailyUsage);
-      const suggestedOrderQty = calculateSuggestedOrderQty(
-        item.quantity,
-        item.reorderLevel,
-        item.minimumStockLevel,
-        item.maximumStockLevel
-      );
-
-      const priority = decidePriority(
-        item.quantity,
-        item.reorderLevel,
-        item.minimumStockLevel
-      );
-
-      const demandTrend = decideDemandTrend(item);
-      const monthlyUsageEstimate = Math.ceil(dailyUsage * 30 * forecastMultiplier(demandTrend));
-      const forecastDemand30d = estimateForecastDemand(30, monthlyUsageEstimate, demandTrend);
-      const forecastDemand60d = estimateForecastDemand(60, monthlyUsageEstimate, demandTrend);
-      const forecastDemand90d = estimateForecastDemand(90, monthlyUsageEstimate, demandTrend);
-
-      const leadTimeDays = getLeadTimeDays(item.category);
-      const reorderByDate = formatReorderByDate(daysOfCover - leadTimeDays);
-      const preferredSupplierName = getPreferredSupplierName(item.id);
-      const supplierScore = getSupplierScore(preferredSupplierName);
-      const riskNote = buildRiskNote(priority, daysOfCover, leadTimeDays);
-      const procurementAction = buildProcurementAction(priority, daysOfCover, leadTimeDays);
-
-      let reason = 'Reorder threshold reached.';
-
-      if (item.quantity <= 0) {
-        reason = 'Out of stock and requires urgent replenishment.';
-      } else if (item.quantity <= item.minimumStockLevel) {
-        reason = 'Below minimum stock level and should be replenished soon.';
-      } else if (item.quantity <= item.reorderLevel) {
-        reason = 'At or below reorder level based on planning rule.';
-      }
-
-      return {
-        id: `reorder-${item.id}`,
-        inventoryItemId: item.id,
-        itemCode: item.sku,
-        itemName: item.name,
-        category: item.category,
-        currentQty: item.quantity,
-        reorderLevel: item.reorderLevel,
-        minimumStockLevel: item.minimumStockLevel,
-        maximumStockLevel: item.maximumStockLevel,
-        suggestedOrderQty,
-        estimatedDailyUsage: dailyUsage,
-        estimatedDaysOfCover: daysOfCover,
-        priority,
-        reason,
-        preferredSupplierName,
-        supplierScore,
-        leadTimeDays,
-        reorderByDate,
-        riskNote,
-        demandTrend,
-        monthlyUsageEstimate,
-        forecastDemand30d,
-        forecastDemand60d,
-        forecastDemand90d,
-        procurementAction
-      };
-    });
-
-  const priorityScore = (value: ReorderPriority) =>
-    value === 'critical' ? 4 :
-    value === 'high' ? 3 :
-    value === 'medium' ? 2 : 1;
-
-  return suggestions.sort((a, b) => priorityScore(b.priority) - priorityScore(a.priority));
 }
