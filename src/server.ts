@@ -19,6 +19,7 @@ import { tasksRouter } from './modules/tasks/routes';
 import { ordersRouter } from './modules/orders/routes';
 import { uomRouter } from './modules/uom/routes';
 import { batchesRouter } from './modules/batches/routes';
+import { stockControlRouter } from './modules/stock-control/routes';
 import {
   getDemoAccounts,
   getSessionDebug,
@@ -199,11 +200,12 @@ app.post(
 );
 
 app.use(`${env.apiPrefix}/inventory`, requireAuth, inventoryRouter);
+app.use(`${env.apiPrefix}/batches`, requireAuth, batchesRouter);
+app.use(`${env.apiPrefix}/stock-control`, requireAuth, stockControlRouter);
 app.use(`${env.apiPrefix}/warehouse`, requireAuth, warehouseRouter);
 app.use(`${env.apiPrefix}/tasks`, requireAuth, tasksRouter);
 app.use(`${env.apiPrefix}/orders`, requireAuth, ordersRouter);
 app.use(`${env.apiPrefix}/uom`, requireAuth, uomRouter);
-app.use(`${env.apiPrefix}/batches`, requireAuth, batchesRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
