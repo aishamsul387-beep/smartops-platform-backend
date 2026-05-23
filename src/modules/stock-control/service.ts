@@ -10,6 +10,8 @@ export type StockAlertType =
 
 export type StockAlertSeverity = 'high' | 'medium' | 'low';
 export type ReorderPriority = 'critical' | 'high' | 'medium' | 'low';
+export type DemandTrend = 'rising' | 'stable' | 'falling';
+export type ProcurementAction = 'order_now' | 'order_this_week' | 'monitor';
 
 export interface StockControlSummary {
   totalItems: number;
@@ -23,6 +25,9 @@ export interface StockControlSummary {
   criticalReorderCount: number;
   highReorderCount: number;
   mediumReorderCount: number;
+  risingDemandItems: number;
+  stableDemandItems: number;
+  fallingDemandItems: number;
 }
 
 export interface StockControlAlert {
@@ -54,9 +59,16 @@ export interface ReorderSuggestion {
   priority: ReorderPriority;
   reason: string;
   preferredSupplierName: string;
+  supplierScore: number;
   leadTimeDays: number;
   reorderByDate: string;
   riskNote: string;
+  demandTrend: DemandTrend;
+  monthlyUsageEstimate: number;
+  forecastDemand30d: number;
+  forecastDemand60d: number;
+  forecastDemand90d: number;
+  procurementAction: ProcurementAction;
 }
 
 function daysBetween(from: Date, to: Date) {
@@ -127,8 +139,62 @@ function getLeadTimeDays(category: string) {
   return 12;
 }
 
+function decideDemandTrend(item: {
+  quantity: number;
+  reorderLevel: number;
+  minimumStockLevel: number;
+  maximumStockLevel: number;
+  category: string;
+}): DemandTrend {
+  const category = item.category.trim().toLowerCase();
+
+  if (item.quantity <= item.minimumStockLevel || category.includes('raw')) {
+    return 'rising';
+  }
+
+  if (
+    (item.maximumStockLevel > 0 && item.quantity > item.maximumStockLevel) ||
+    category.includes('finished')
+  ) {
+    return 'falling';
+  }
+
+  return 'stable';
+}
+
+function forecastMultiplier(trend: DemandTrend) {
+  if (trend === 'rising') return 1.2;
+  if (trend === 'falling') return 0.8;
+  return 1;
+}
+
+function estimateForecastDemand(days: number, monthlyUsage: number, trend: DemandTrend) {
+  const base = monthlyUsage * (days / 30);
+  return Math.ceil(base * forecastMultiplier(trend));
+}
+
 function getPreferredSupplierName(inventoryItemId: string, fallback = 'Unassigned supplier') {
   return fallbackMap[inventoryItemId] || fallback;
+}
+
+function getSupplierScore(preferredSupplierName: string) {
+  if (!preferredSupplierName || preferredSupplierName === 'Unassigned supplier') {
+    return 45;
+  }
+
+  if (preferredSupplierName.toLowerCase().includes('prime')) {
+    return 92;
+  }
+
+  if (preferredSupplierName.toLowerCase().includes('pack')) {
+    return 84;
+  }
+
+  if (preferredSupplierName.toLowerCase().includes('valve')) {
+    return 78;
+  }
+
+  return 70;
 }
 
 let fallbackMap: Record<string, string> = {};
@@ -163,6 +229,18 @@ function buildRiskNote(priority: ReorderPriority, daysOfCover: number, leadTimeD
   }
 
   return 'Monitor and replenish within normal planning cycle.';
+}
+
+function buildProcurementAction(priority: ReorderPriority, daysOfCover: number, leadTimeDays: number): ProcurementAction {
+  if (priority === 'critical') {
+    return 'order_now';
+  }
+
+  if (priority === 'high' || daysOfCover < leadTimeDays) {
+    return 'order_this_week';
+  }
+
+  return 'monitor';
 }
 
 function formatReorderByDate(daysUntilOrder: number) {
@@ -213,13 +291,18 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
 
   const totalOnHandQty = inventory.reduce((sum, item) => sum + item.quantity, 0);
 
-  const reorderSuggestions = inventory
+  const reorderPriorities = inventory
     .filter((item) => item.isActive && item.quantity <= item.reorderLevel)
     .map((item) => decidePriority(item.quantity, item.reorderLevel, item.minimumStockLevel));
 
-  const criticalReorderCount = reorderSuggestions.filter((p) => p === 'critical').length;
-  const highReorderCount = reorderSuggestions.filter((p) => p === 'high').length;
-  const mediumReorderCount = reorderSuggestions.filter((p) => p === 'medium').length;
+  const criticalReorderCount = reorderPriorities.filter((p) => p === 'critical').length;
+  const highReorderCount = reorderPriorities.filter((p) => p === 'high').length;
+  const mediumReorderCount = reorderPriorities.filter((p) => p === 'medium').length;
+
+  const trends = inventory.map(decideDemandTrend);
+  const risingDemandItems = trends.filter((t) => t === 'rising').length;
+  const stableDemandItems = trends.filter((t) => t === 'stable').length;
+  const fallingDemandItems = trends.filter((t) => t === 'falling').length;
 
   return {
     totalItems: inventory.length,
@@ -232,7 +315,10 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
     reorderCandidates,
     criticalReorderCount,
     highReorderCount,
-    mediumReorderCount
+    mediumReorderCount,
+    risingDemandItems,
+    stableDemandItems,
+    fallingDemandItems
   };
 }
 
@@ -368,10 +454,18 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         item.minimumStockLevel
       );
 
+      const demandTrend = decideDemandTrend(item);
+      const monthlyUsageEstimate = Math.ceil(dailyUsage * 30 * forecastMultiplier(demandTrend));
+      const forecastDemand30d = estimateForecastDemand(30, monthlyUsageEstimate, demandTrend);
+      const forecastDemand60d = estimateForecastDemand(60, monthlyUsageEstimate, demandTrend);
+      const forecastDemand90d = estimateForecastDemand(90, monthlyUsageEstimate, demandTrend);
+
       const leadTimeDays = getLeadTimeDays(item.category);
       const reorderByDate = formatReorderByDate(daysOfCover - leadTimeDays);
       const preferredSupplierName = getPreferredSupplierName(item.id);
+      const supplierScore = getSupplierScore(preferredSupplierName);
       const riskNote = buildRiskNote(priority, daysOfCover, leadTimeDays);
+      const procurementAction = buildProcurementAction(priority, daysOfCover, leadTimeDays);
 
       let reason = 'Reorder threshold reached.';
 
@@ -399,9 +493,16 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         priority,
         reason,
         preferredSupplierName,
+        supplierScore,
         leadTimeDays,
         reorderByDate,
-        riskNote
+        riskNote,
+        demandTrend,
+        monthlyUsageEstimate,
+        forecastDemand30d,
+        forecastDemand60d,
+        forecastDemand90d,
+        procurementAction
       };
     });
 
