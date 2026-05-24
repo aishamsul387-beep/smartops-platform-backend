@@ -1,7 +1,9 @@
 import { Router } from 'express';
-import { ok } from '../../common/http/api-response';
+import { created, ok } from '../../common/http/api-response';
 import { asyncHandler } from '../../common/utils/async-handler';
+import { AppError } from '../../common/errors/app-error';
 import {
+  createDraftPurchaseOrderFromSuggestion,
   getProcurementActionQueue,
   getReorderSuggestions,
   getStockControlAlerts,
@@ -9,6 +11,14 @@ import {
 } from './service';
 
 export const stockControlRouter = Router();
+
+function readSingle(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value[0] ?? '';
+  }
+
+  return value ?? '';
+}
 
 stockControlRouter.get(
   '/summary',
@@ -31,6 +41,27 @@ stockControlRouter.get(
   asyncHandler(async (_request, response) => {
     const suggestions = await getReorderSuggestions();
     return ok(response, suggestions, 200);
+  })
+);
+
+stockControlRouter.post(
+  '/reorder-suggestions/:inventoryItemId/create-po-draft',
+  asyncHandler(async (request, response) => {
+    const inventoryItemId = readSingle(
+      request.params.inventoryItemId as string | string[] | undefined
+    );
+
+    const result = await createDraftPurchaseOrderFromSuggestion(inventoryItemId);
+
+    if (!result) {
+      throw new AppError({
+        status: 404,
+        code: 'REORDER_SUGGESTION_NOT_FOUND',
+        message: 'Reorder suggestion not found for the given inventory item'
+      });
+    }
+
+    return created(response, result);
   })
 );
 

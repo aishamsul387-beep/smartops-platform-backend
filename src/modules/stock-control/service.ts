@@ -1,5 +1,6 @@
 import { listInventory } from '../inventory/repository';
 import { listBatches } from '../batches/repository';
+import { createPurchaseOrder } from '../orders/store';
 
 export type StockAlertType =
   | 'low_stock'
@@ -102,6 +103,32 @@ export interface ProcurementQueueItem {
   standardCost: number;
   currency: string;
   estimatedOrderValue: number;
+}
+
+export interface DraftPurchaseOrderResult {
+  purchaseOrder: {
+    id: string;
+    poNo: string;
+    supplierName: string;
+    itemCount: number;
+    totalAmount: number;
+    currency: string;
+    status: string;
+    expectedDate: string;
+    createdAt: string;
+  };
+  sourceSuggestion: {
+    inventoryItemId: string;
+    itemCode: string;
+    itemName: string;
+    suggestedOrderQty: number;
+    estimatedReorderValue: number;
+    preferredSupplierName: string;
+    supplierSource: SupplierSource;
+    standardCost: number;
+    currency: string;
+    reorderByDate: string;
+  };
 }
 
 function daysBetween(from: Date, to: Date) {
@@ -360,6 +387,16 @@ function getPlanningCurrency(
   return String(firstInventoryCurrency ?? firstSuggestionCurrency ?? 'USD').trim().toUpperCase() || 'USD';
 }
 
+function toExpectedDateIso(dateText: string) {
+  const parsed = new Date(`${dateText}T00:00:00.000Z`);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString();
+  }
+
+  return parsed.toISOString();
+}
+
 export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
   const inventory = await listInventory({ status: 'all', search: '' });
   const batches = await listBatches({ status: 'all', search: '' });
@@ -504,6 +541,57 @@ export async function getProcurementActionQueue(): Promise<ProcurementQueueItem[
     currency: item.currency,
     estimatedOrderValue: item.estimatedReorderValue
   }));
+}
+
+export async function createDraftPurchaseOrderFromSuggestion(
+  inventoryItemId: string
+): Promise<DraftPurchaseOrderResult | null> {
+  const suggestions = await getReorderSuggestions();
+  const suggestion = suggestions.find((item) => item.inventoryItemId === inventoryItemId);
+
+  if (!suggestion) {
+    return null;
+  }
+
+  const supplierName =
+    suggestion.preferredSupplierName && suggestion.preferredSupplierName !== 'Unassigned supplier'
+      ? suggestion.preferredSupplierName
+      : 'Pending supplier assignment';
+
+  const purchaseOrder = createPurchaseOrder({
+    supplierName,
+    itemCount: 1,
+    totalAmount: suggestion.estimatedReorderValue,
+    currency: suggestion.currency,
+    expectedDate: toExpectedDateIso(suggestion.reorderByDate),
+    status: 'draft'
+  });
+
+  return {
+    purchaseOrder: {
+      id: purchaseOrder.id,
+      poNo: purchaseOrder.poNo,
+      supplierName: purchaseOrder.supplierName,
+      itemCount: purchaseOrder.itemCount,
+      totalAmount: purchaseOrder.totalAmount,
+      currency: purchaseOrder.currency,
+      status: purchaseOrder.status,
+      expectedDate: purchaseOrder.expectedDate,
+      createdAt: purchaseOrder.createdAt
+    },
+    sourceSuggestion: {
+      inventoryItemId: suggestion.inventoryItemId,
+      itemCode: suggestion.itemCode,
+      itemName: suggestion.itemName,
+      suggestedOrderQty: suggestion.suggestedOrderQty,
+      estimatedReorderValue: suggestion.estimatedReorderValue,
+      preferredSupplierName: suggestion.preferredSupplierName,
+      supplierSource: suggestion.supplierSource,
+      standardCost: suggestion.standardCost,
+      currency: suggestion.currency,
+      reorderByDate: suggestion.reorderByDate
+    }
+  };
 }
 
 export async function getStockControlSummary(): Promise<StockControlSummary> {
