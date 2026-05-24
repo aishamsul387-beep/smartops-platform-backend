@@ -17,6 +17,19 @@ export interface PlanningContextRecord {
   reorderByDate: string;
 }
 
+export interface PurchaseOrderLineRecord {
+  id: string;
+  lineNo: number;
+  inventoryItemId: string;
+  itemCode: string;
+  itemName: string;
+  orderedQty: number;
+  unitCost: number;
+  currency: string;
+  lineTotal: number;
+  notes: string;
+}
+
 export interface QuotationRecord {
   id: string;
   quotationNo: string;
@@ -40,6 +53,7 @@ export interface PurchaseOrderRecord {
   expectedDate: string;
   createdAt: string;
   planningContext: PlanningContextRecord | null;
+  lines: PurchaseOrderLineRecord[];
 }
 
 export interface GRNRecord {
@@ -73,6 +87,17 @@ export interface OrdersDashboardSummary {
   pendingReceipts: number;
 }
 
+export interface CreatePurchaseOrderLineInput {
+  inventoryItemId: string;
+  itemCode: string;
+  itemName: string;
+  orderedQty: number;
+  unitCost: number;
+  currency: string;
+  lineTotal?: number;
+  notes?: string;
+}
+
 export interface CreatePurchaseOrderInput {
   supplierName: string;
   quotationNo?: string;
@@ -82,6 +107,7 @@ export interface CreatePurchaseOrderInput {
   expectedDate: string;
   status: PurchaseOrderStatus;
   planningContext?: PlanningContextRecord | null;
+  lines?: CreatePurchaseOrderLineInput[];
 }
 
 export interface CreateGRNInput {
@@ -143,39 +169,81 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
     poNo: 'PO-2026-001',
     supplierName: 'Prime Steel Supply',
     quotationNo: 'QT-2026-001',
-    itemCount: 4,
+    itemCount: 1,
     totalAmount: 12500,
     currency: 'USD',
     status: 'issued',
     expectedDate: '2026-05-25T00:00:00.000Z',
     createdAt: '2026-05-21T11:20:00.000Z',
-    planningContext: null
+    planningContext: null,
+    lines: [
+      {
+        id: 'pol-001',
+        lineNo: 1,
+        inventoryItemId: 'inv-001',
+        itemCode: 'RM-STEEL-001',
+        itemName: 'Steel Sheet A',
+        orderedQty: 240,
+        unitCost: 52.08,
+        currency: 'USD',
+        lineTotal: 12500,
+        notes: 'Seeded demo PO line'
+      }
+    ]
   },
   {
     id: 'po-002',
     poNo: 'PO-2026-002',
     supplierName: 'PackRight Industries',
     quotationNo: 'QT-2026-002',
-    itemCount: 2,
+    itemCount: 1,
     totalAmount: 1800,
     currency: 'USD',
     status: 'partially_received',
     expectedDate: '2026-05-24T00:00:00.000Z',
     createdAt: '2026-05-21T12:10:00.000Z',
-    planningContext: null
+    planningContext: null,
+    lines: [
+      {
+        id: 'pol-002',
+        lineNo: 1,
+        inventoryItemId: 'inv-002',
+        itemCode: 'PK-BOX-010',
+        itemName: 'Carton Box Medium',
+        orderedQty: 900,
+        unitCost: 2,
+        currency: 'USD',
+        lineTotal: 1800,
+        notes: 'Seeded demo PO line'
+      }
+    ]
   },
   {
     id: 'po-003',
     poNo: 'PO-2026-003',
     supplierName: 'ValveCore Manufacturing',
     quotationNo: 'QT-2026-003',
-    itemCount: 6,
+    itemCount: 1,
     totalAmount: 9300,
     currency: 'USD',
     status: 'draft',
     expectedDate: '2026-05-28T00:00:00.000Z',
     createdAt: '2026-05-21T13:00:00.000Z',
-    planningContext: null
+    planningContext: null,
+    lines: [
+      {
+        id: 'pol-003',
+        lineNo: 1,
+        inventoryItemId: 'inv-003',
+        itemCode: 'FG-VALVE-221',
+        itemName: 'Control Valve X',
+        orderedQty: 84,
+        unitCost: 110.71,
+        currency: 'USD',
+        lineTotal: 9300,
+        notes: 'Seeded demo PO line'
+      }
+    ]
   }
 ];
 
@@ -281,7 +349,8 @@ export function listPurchaseOrders(filters?: { search?: string; status?: string 
         item.status,
         item.planningContext?.itemCode || '',
         item.planningContext?.itemName || '',
-        item.planningContext?.planningSource || ''
+        item.planningContext?.planningSource || '',
+        ...item.lines.flatMap((line) => [line.itemCode, line.itemName])
       ],
       filters?.search
     );
@@ -298,22 +367,72 @@ export function getPurchaseOrderById(id: string) {
 }
 
 export function createPurchaseOrder(input: CreatePurchaseOrderInput) {
+  const now = Date.now();
+
+  const lines: PurchaseOrderLineRecord[] = (input.lines ?? []).map((line, index) => {
+    const unitCost = Number(line.unitCost);
+    const orderedQty = Number(line.orderedQty);
+    const lineTotal =
+      line.lineTotal !== undefined
+        ? Number(line.lineTotal)
+        : Number((orderedQty * unitCost).toFixed(2));
+
+    return {
+      id: `pol-${now}-${index + 1}`,
+      lineNo: index + 1,
+      inventoryItemId: line.inventoryItemId,
+      itemCode: line.itemCode,
+      itemName: line.itemName,
+      orderedQty,
+      unitCost,
+      currency: line.currency || input.currency,
+      lineTotal,
+      notes: line.notes || ''
+    };
+  });
+
+  const totalAmount =
+    lines.length > 0
+      ? Number(lines.reduce((sum, line) => sum + line.lineTotal, 0).toFixed(2))
+      : input.totalAmount;
+
+  const itemCount = lines.length > 0 ? lines.length : input.itemCount;
+
   const record: PurchaseOrderRecord = {
-    id: 'po-' + Date.now(),
+    id: 'po-' + now,
     poNo: nextPONumber(),
     supplierName: input.supplierName,
     quotationNo: input.quotationNo || undefined,
-    itemCount: input.itemCount,
-    totalAmount: input.totalAmount,
+    itemCount,
+    totalAmount,
     currency: input.currency,
     status: input.status,
     expectedDate: input.expectedDate,
     createdAt: new Date().toISOString(),
-    planningContext: input.planningContext ?? null
+    planningContext: input.planningContext ?? null,
+    lines
   };
 
   purchaseOrderStore = [record, ...purchaseOrderStore];
   return record;
+}
+
+export function issuePurchaseOrder(id: string) {
+  const index = purchaseOrderStore.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return null;
+  }
+
+  const current = purchaseOrderStore[index];
+
+  const updated: PurchaseOrderRecord = {
+    ...current,
+    status: 'issued'
+  };
+
+  purchaseOrderStore[index] = updated;
+  return updated;
 }
 
 export function listGRNs(filters?: { search?: string; status?: string }) {
