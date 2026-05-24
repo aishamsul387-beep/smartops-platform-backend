@@ -3,6 +3,19 @@ import { createBatch, type BatchStatus } from '../batches/repository';
 export type QuotationStatus = 'draft' | 'sent' | 'approved' | 'rejected';
 export type PurchaseOrderStatus = 'draft' | 'issued' | 'partially_received' | 'received';
 export type GRNStatus = 'draft' | 'posted';
+export type PlanningSource = 'stock_control';
+export type SupplierSource = 'inventory_master' | 'batch_history' | 'unassigned';
+
+export interface PlanningContextRecord {
+  planningSource: PlanningSource;
+  inventoryItemId: string;
+  itemCode: string;
+  itemName: string;
+  suggestedOrderQty: number;
+  supplierSource: SupplierSource;
+  estimatedReorderValue: number;
+  reorderByDate: string;
+}
 
 export interface QuotationRecord {
   id: string;
@@ -26,6 +39,7 @@ export interface PurchaseOrderRecord {
   status: PurchaseOrderStatus;
   expectedDate: string;
   createdAt: string;
+  planningContext: PlanningContextRecord | null;
 }
 
 export interface GRNRecord {
@@ -67,6 +81,7 @@ export interface CreatePurchaseOrderInput {
   currency: string;
   expectedDate: string;
   status: PurchaseOrderStatus;
+  planningContext?: PlanningContextRecord | null;
 }
 
 export interface CreateGRNInput {
@@ -133,7 +148,8 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
     currency: 'USD',
     status: 'issued',
     expectedDate: '2026-05-25T00:00:00.000Z',
-    createdAt: '2026-05-21T11:20:00.000Z'
+    createdAt: '2026-05-21T11:20:00.000Z',
+    planningContext: null
   },
   {
     id: 'po-002',
@@ -145,7 +161,8 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
     currency: 'USD',
     status: 'partially_received',
     expectedDate: '2026-05-24T00:00:00.000Z',
-    createdAt: '2026-05-21T12:10:00.000Z'
+    createdAt: '2026-05-21T12:10:00.000Z',
+    planningContext: null
   },
   {
     id: 'po-003',
@@ -157,7 +174,8 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
     currency: 'USD',
     status: 'draft',
     expectedDate: '2026-05-28T00:00:00.000Z',
-    createdAt: '2026-05-21T13:00:00.000Z'
+    createdAt: '2026-05-21T13:00:00.000Z',
+    planningContext: null
   }
 ];
 
@@ -256,7 +274,15 @@ export function listQuotations(filters?: { search?: string; status?: string }) {
 export function listPurchaseOrders(filters?: { search?: string; status?: string }) {
   return purchaseOrderStore.filter((item) => {
     const okSearch = matchesSearch(
-      [item.poNo, item.supplierName, item.quotationNo || '', item.status],
+      [
+        item.poNo,
+        item.supplierName,
+        item.quotationNo || '',
+        item.status,
+        item.planningContext?.itemCode || '',
+        item.planningContext?.itemName || '',
+        item.planningContext?.planningSource || ''
+      ],
       filters?.search
     );
 
@@ -282,7 +308,8 @@ export function createPurchaseOrder(input: CreatePurchaseOrderInput) {
     currency: input.currency,
     status: input.status,
     expectedDate: input.expectedDate,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    planningContext: input.planningContext ?? null
   };
 
   purchaseOrderStore = [record, ...purchaseOrderStore];
