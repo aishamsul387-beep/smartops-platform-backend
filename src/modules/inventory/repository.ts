@@ -1,7 +1,12 @@
-import { env } from '../../config/env';
 import { execute, isPostgresEnabled, queryRows } from '../../infrastructure/db/postgres';
 
 export type InventoryStatus = 'in_stock' | 'low_stock' | 'out_of_stock';
+export type InventoryItemType =
+  | 'raw_material'
+  | 'finished_goods'
+  | 'packaging'
+  | 'spare_part'
+  | 'consumable';
 
 export interface InventoryRecord {
   id: string;
@@ -10,6 +15,13 @@ export interface InventoryRecord {
   name: string;
   description: string;
   category: string;
+  itemType: InventoryItemType;
+  brand: string;
+  model: string;
+  preferredSupplierName: string;
+  standardCost: number;
+  averageCost: number;
+  currency: string;
   quantity: number;
   reorderLevel: number;
   minimumStockLevel: number;
@@ -37,6 +49,13 @@ export interface CreateInventoryInput {
   name: string;
   description: string;
   category: string;
+  itemType: InventoryItemType;
+  brand: string;
+  model: string;
+  preferredSupplierName: string;
+  standardCost: number;
+  averageCost: number;
+  currency: string;
   quantity: number;
   reorderLevel: number;
   minimumStockLevel: number;
@@ -71,6 +90,13 @@ let memoryInventoryStore: InventoryRecord[] = [
     name: 'Steel Sheet A',
     description: 'Primary steel sheet material for fabrication use.',
     category: 'Raw Material',
+    itemType: 'raw_material',
+    brand: 'PrimeSteel',
+    model: 'Sheet-A',
+    preferredSupplierName: 'Prime Steel Supply',
+    standardCost: 15.5,
+    averageCost: 15.2,
+    currency: 'USD',
     quantity: 240,
     reorderLevel: 80,
     minimumStockLevel: 60,
@@ -98,6 +124,13 @@ let memoryInventoryStore: InventoryRecord[] = [
     name: 'Carton Box Medium',
     description: 'Medium-size packaging carton for outbound packing.',
     category: 'Packaging',
+    itemType: 'packaging',
+    brand: 'PackRight',
+    model: 'Medium-Box',
+    preferredSupplierName: 'PackRight Industries',
+    standardCost: 2.1,
+    averageCost: 2.0,
+    currency: 'USD',
     quantity: 35,
     reorderLevel: 50,
     minimumStockLevel: 40,
@@ -125,6 +158,13 @@ let memoryInventoryStore: InventoryRecord[] = [
     name: 'Control Valve X',
     description: 'Finished control valve item for industrial order fulfillment.',
     category: 'Finished Goods',
+    itemType: 'finished_goods',
+    brand: 'ValveCore',
+    model: 'X221',
+    preferredSupplierName: 'ValveCore Manufacturing',
+    standardCost: 110,
+    averageCost: 108,
+    currency: 'USD',
     quantity: 0,
     reorderLevel: 20,
     minimumStockLevel: 15,
@@ -165,13 +205,20 @@ function mapRow(row: any): InventoryRecord {
     name: String(row.name),
     description: String(row.description ?? ''),
     category: String(row.category),
+    itemType: String(row.item_type ?? 'raw_material') as InventoryItemType,
+    brand: String(row.brand ?? ''),
+    model: String(row.model ?? ''),
+    preferredSupplierName: String(row.preferred_supplier_name ?? ''),
+    standardCost: Number(row.standard_cost ?? 0),
+    averageCost: Number(row.average_cost ?? 0),
+    currency: String(row.currency ?? 'USD'),
     quantity: Number(row.quantity),
     reorderLevel: Number(row.reorder_level),
     minimumStockLevel: Number(row.minimum_stock_level ?? 0),
     maximumStockLevel: Number(row.maximum_stock_level ?? 0),
     unit: String(row.unit),
     warehouseLocation: String(row.warehouse_location),
-    status: row.status as InventoryStatus,
+    status: String(row.status) as InventoryStatus,
     isActive: Boolean(row.is_active),
     isBatchTracked: Boolean(row.is_batch_tracked),
     isExpiryTracked: Boolean(row.is_expiry_tracked),
@@ -222,7 +269,18 @@ export async function ensureInventoryTable() {
     )
   `);
 
-  const rows = await queryRows<{ total: string }>('SELECT COUNT(*)::text AS total FROM inventory_items');
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'raw_material'`);
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS brand TEXT NOT NULL DEFAULT ''`);
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT ''`);
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS preferred_supplier_name TEXT NOT NULL DEFAULT ''`);
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS standard_cost NUMERIC NOT NULL DEFAULT 0`);
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS average_cost NUMERIC NOT NULL DEFAULT 0`);
+  await execute(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD'`);
+
+  const rows = await queryRows<{ total: string }>(
+    'SELECT COUNT(*)::text AS total FROM inventory_items'
+  );
+
   const total = Number(rows[0]?.total ?? '0');
 
   if (total === 0) {
@@ -230,17 +288,41 @@ export async function ensureInventoryTable() {
       await execute(
         `
         INSERT INTO inventory_items (
-          id, sku, barcode, name, description, category, quantity, reorder_level,
-          minimum_stock_level, maximum_stock_level, unit, warehouse_location, status,
-          is_active, is_batch_tracked, is_expiry_tracked, is_serial_tracked,
-          base_uom_code, purchase_uom_code, sales_uom_code, issue_uom_code,
-          uom_conversion_group_code, allows_fraction, notes, updated_at
+          id,
+          sku,
+          barcode,
+          name,
+          description,
+          category,
+          item_type,
+          brand,
+          model,
+          preferred_supplier_name,
+          standard_cost,
+          average_cost,
+          currency,
+          quantity,
+          reorder_level,
+          minimum_stock_level,
+          maximum_stock_level,
+          unit,
+          warehouse_location,
+          status,
+          is_active,
+          is_batch_tracked,
+          is_expiry_tracked,
+          is_serial_tracked,
+          base_uom_code,
+          purchase_uom_code,
+          sales_uom_code,
+          issue_uom_code,
+          uom_conversion_group_code,
+          allows_fraction,
+          notes,
+          updated_at
         ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,
-          $9,$10,$11,$12,$13,
-          $14,$15,$16,$17,
-          $18,$19,$20,$21,
-          $22,$23,$24,$25
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+          $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
         )
         `,
         [
@@ -250,6 +332,13 @@ export async function ensureInventoryTable() {
           item.name,
           item.description,
           item.category,
+          item.itemType,
+          item.brand,
+          item.model,
+          item.preferredSupplierName,
+          item.standardCost,
+          item.averageCost,
+          item.currency,
           item.quantity,
           item.reorderLevel,
           item.minimumStockLevel,
@@ -281,11 +370,24 @@ export async function listInventory(filters?: { search?: string; status?: string
   if (!isPostgresEnabled()) {
     return memoryInventoryStore.filter((item) => {
       const okSearch = matchesSearch(
-        [item.name, item.sku, item.category, item.barcode, item.description],
+        [
+          item.name,
+          item.sku,
+          item.category,
+          item.itemType,
+          item.barcode,
+          item.description,
+          item.brand,
+          item.model,
+          item.preferredSupplierName,
+          item.currency
+        ],
         filters?.search
       );
+
       const status = String(filters?.status ?? '').trim();
       const okStatus = !status || status === 'all' || item.status === status;
+
       return okSearch && okStatus;
     });
   }
@@ -303,6 +405,13 @@ export async function listInventory(filters?: { search?: string; status?: string
       name,
       description,
       category,
+      item_type,
+      brand,
+      model,
+      preferred_supplier_name,
+      standard_cost,
+      average_cost,
+      currency,
       quantity,
       reorder_level,
       minimum_stock_level,
@@ -335,8 +444,13 @@ export async function listInventory(filters?: { search?: string; status?: string
         LOWER(name) LIKE $${index}
         OR LOWER(sku) LIKE $${index}
         OR LOWER(category) LIKE $${index}
+        OR LOWER(item_type) LIKE $${index}
         OR LOWER(barcode) LIKE $${index}
         OR LOWER(description) LIKE $${index}
+        OR LOWER(brand) LIKE $${index}
+        OR LOWER(model) LIKE $${index}
+        OR LOWER(preferred_supplier_name) LIKE $${index}
+        OR LOWER(currency) LIKE $${index}
       )
     `;
     params.push(`%${search}%`);
@@ -371,6 +485,13 @@ export async function getInventoryById(id: string) {
       name,
       description,
       category,
+      item_type,
+      brand,
+      model,
+      preferred_supplier_name,
+      standard_cost,
+      average_cost,
+      currency,
       quantity,
       reorder_level,
       minimum_stock_level,
@@ -412,6 +533,13 @@ export async function createInventory(input: CreateInventoryInput) {
     name: input.name,
     description: input.description,
     category: input.category,
+    itemType: input.itemType,
+    brand: input.brand,
+    model: input.model,
+    preferredSupplierName: input.preferredSupplierName,
+    standardCost: input.standardCost,
+    averageCost: input.averageCost,
+    currency: input.currency,
     quantity: input.quantity,
     reorderLevel: input.reorderLevel,
     minimumStockLevel: input.minimumStockLevel,
@@ -443,17 +571,41 @@ export async function createInventory(input: CreateInventoryInput) {
   await execute(
     `
     INSERT INTO inventory_items (
-      id, sku, barcode, name, description, category, quantity, reorder_level,
-      minimum_stock_level, maximum_stock_level, unit, warehouse_location, status,
-      is_active, is_batch_tracked, is_expiry_tracked, is_serial_tracked,
-      base_uom_code, purchase_uom_code, sales_uom_code, issue_uom_code,
-      uom_conversion_group_code, allows_fraction, notes, updated_at
+      id,
+      sku,
+      barcode,
+      name,
+      description,
+      category,
+      item_type,
+      brand,
+      model,
+      preferred_supplier_name,
+      standard_cost,
+      average_cost,
+      currency,
+      quantity,
+      reorder_level,
+      minimum_stock_level,
+      maximum_stock_level,
+      unit,
+      warehouse_location,
+      status,
+      is_active,
+      is_batch_tracked,
+      is_expiry_tracked,
+      is_serial_tracked,
+      base_uom_code,
+      purchase_uom_code,
+      sales_uom_code,
+      issue_uom_code,
+      uom_conversion_group_code,
+      allows_fraction,
+      notes,
+      updated_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,
-      $9,$10,$11,$12,$13,
-      $14,$15,$16,$17,
-      $18,$19,$20,$21,
-      $22,$23,$24,$25
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+      $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
     )
     `,
     [
@@ -463,6 +615,13 @@ export async function createInventory(input: CreateInventoryInput) {
       record.name,
       record.description,
       record.category,
+      record.itemType,
+      record.brand,
+      record.model,
+      record.preferredSupplierName,
+      record.standardCost,
+      record.averageCost,
+      record.currency,
       record.quantity,
       record.reorderLevel,
       record.minimumStockLevel,
@@ -496,6 +655,13 @@ export async function updateInventory(input: UpdateInventoryInput) {
     name: input.name,
     description: input.description,
     category: input.category,
+    itemType: input.itemType,
+    brand: input.brand,
+    model: input.model,
+    preferredSupplierName: input.preferredSupplierName,
+    standardCost: input.standardCost,
+    averageCost: input.averageCost,
+    currency: input.currency,
     quantity: input.quantity,
     reorderLevel: input.reorderLevel,
     minimumStockLevel: input.minimumStockLevel,
@@ -519,6 +685,7 @@ export async function updateInventory(input: UpdateInventoryInput) {
 
   if (!isPostgresEnabled()) {
     const index = memoryInventoryStore.findIndex((item) => item.id === input.id);
+
     if (index === -1) {
       return null;
     }
@@ -538,25 +705,32 @@ export async function updateInventory(input: UpdateInventoryInput) {
       name = $4,
       description = $5,
       category = $6,
-      quantity = $7,
-      reorder_level = $8,
-      minimum_stock_level = $9,
-      maximum_stock_level = $10,
-      unit = $11,
-      warehouse_location = $12,
-      status = $13,
-      is_active = $14,
-      is_batch_tracked = $15,
-      is_expiry_tracked = $16,
-      is_serial_tracked = $17,
-      base_uom_code = $18,
-      purchase_uom_code = $19,
-      sales_uom_code = $20,
-      issue_uom_code = $21,
-      uom_conversion_group_code = $22,
-      allows_fraction = $23,
-      notes = $24,
-      updated_at = $25
+      item_type = $7,
+      brand = $8,
+      model = $9,
+      preferred_supplier_name = $10,
+      standard_cost = $11,
+      average_cost = $12,
+      currency = $13,
+      quantity = $14,
+      reorder_level = $15,
+      minimum_stock_level = $16,
+      maximum_stock_level = $17,
+      unit = $18,
+      warehouse_location = $19,
+      status = $20,
+      is_active = $21,
+      is_batch_tracked = $22,
+      is_expiry_tracked = $23,
+      is_serial_tracked = $24,
+      base_uom_code = $25,
+      purchase_uom_code = $26,
+      sales_uom_code = $27,
+      issue_uom_code = $28,
+      uom_conversion_group_code = $29,
+      allows_fraction = $30,
+      notes = $31,
+      updated_at = $32
     WHERE id = $1
     `,
     [
@@ -566,6 +740,13 @@ export async function updateInventory(input: UpdateInventoryInput) {
       updated.name,
       updated.description,
       updated.category,
+      updated.itemType,
+      updated.brand,
+      updated.model,
+      updated.preferredSupplierName,
+      updated.standardCost,
+      updated.averageCost,
+      updated.currency,
       updated.quantity,
       updated.reorderLevel,
       updated.minimumStockLevel,
@@ -593,20 +774,19 @@ export async function updateInventory(input: UpdateInventoryInput) {
 
 export async function setInventoryActiveStatus(id: string, isActive: boolean) {
   if (!isPostgresEnabled()) {
-    const current = memoryInventoryStore.find((item) => item.id === id);
-    if (!current) {
+    const index = memoryInventoryStore.findIndex((item) => item.id === id);
+
+    if (index === -1) {
       return null;
     }
 
-    const updated: InventoryRecord = {
-      ...current,
+    memoryInventoryStore[index] = {
+      ...memoryInventoryStore[index],
       isActive,
       updatedAt: new Date().toISOString()
     };
 
-    const index = memoryInventoryStore.findIndex((item) => item.id === id);
-    memoryInventoryStore[index] = updated;
-    return updated;
+    return memoryInventoryStore[index];
   }
 
   await ensureInventoryTable();
@@ -614,9 +794,7 @@ export async function setInventoryActiveStatus(id: string, isActive: boolean) {
   await execute(
     `
     UPDATE inventory_items
-    SET
-      is_active = $2,
-      updated_at = $3
+    SET is_active = $2, updated_at = $3
     WHERE id = $1
     `,
     [id, isActive, new Date().toISOString()]
@@ -626,5 +804,5 @@ export async function setInventoryActiveStatus(id: string, isActive: boolean) {
 }
 
 export function getInventoryPersistenceMode() {
-  return env.databaseUrl ? 'postgres' : 'memory';
+  return isPostgresEnabled() ? 'postgres' : 'memory';
 }

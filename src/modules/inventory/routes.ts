@@ -9,9 +9,10 @@ import {
   listInventory,
   setInventoryActiveStatus,
   updateInventory,
+  type InventoryItemType,
   type InventoryStatus
 } from './repository';
-import { getUomById, listConversionGroups, listUoms } from '../uom/store';
+import { listConversionGroups, listUoms } from '../uom/store';
 
 export const inventoryRouter = Router();
 
@@ -24,6 +25,13 @@ function readSingle(value: string | string[] | undefined) {
 }
 
 const allowedStatuses: InventoryStatus[] = ['in_stock', 'low_stock', 'out_of_stock'];
+const allowedItemTypes: InventoryItemType[] = [
+  'raw_material',
+  'finished_goods',
+  'packaging',
+  'spare_part',
+  'consumable'
+];
 
 function requireText(value: unknown, field: string, min = 1, max = 150) {
   const text = String(value ?? '').trim();
@@ -41,6 +49,24 @@ function requireText(value: unknown, field: string, min = 1, max = 150) {
       status: 400,
       code: 'VALIDATION_ERROR',
       message: `${field} must be between ${min} and ${max} characters`
+    });
+  }
+
+  return text;
+}
+
+function optionalText(value: unknown, max = 250) {
+  const text = String(value ?? '').trim();
+
+  if (!text) {
+    return '';
+  }
+
+  if (text.length > max) {
+    throw new AppError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message: `Text length must be ${max} characters or less`
     });
   }
 
@@ -73,6 +99,26 @@ function normalizeStatus(value: unknown) {
   }
 
   return status;
+}
+
+function normalizeItemType(value: unknown) {
+  const itemType = String(value ?? '').trim() as InventoryItemType;
+
+  if (!allowedItemTypes.includes(itemType)) {
+    throw new AppError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message:
+        'itemType must be one of: raw_material, finished_goods, packaging, spare_part, consumable'
+    });
+  }
+
+  return itemType;
+}
+
+function requireCurrency(value: unknown) {
+  const currency = requireText(value, 'currency', 3, 10).toUpperCase();
+  return currency;
 }
 
 function requireActiveUomCode(value: unknown, field: string) {
@@ -132,20 +178,38 @@ function optionalActiveConversionGroupCode(value: unknown) {
 }
 
 function buildInventoryInput(body: any) {
+  const minimumStockLevel = requireNumber(body?.minimumStockLevel, 'minimumStockLevel', 0);
+  const maximumStockLevel = requireNumber(body?.maximumStockLevel, 'maximumStockLevel', 0);
+
+  if (maximumStockLevel > 0 && maximumStockLevel < minimumStockLevel) {
+    throw new AppError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message: 'maximumStockLevel must be greater than or equal to minimumStockLevel'
+    });
+  }
+
   return {
     sku: requireText(body?.sku, 'sku', 2, 50),
-    barcode: String(body?.barcode ?? '').trim(),
+    barcode: optionalText(body?.barcode, 60),
     name: requireText(body?.name, 'name', 2, 120),
-    description: String(body?.description ?? '').trim(),
+    description: optionalText(body?.description, 500),
     category: requireText(body?.category, 'category', 2, 80),
+    itemType: normalizeItemType(body?.itemType),
+    brand: optionalText(body?.brand, 80),
+    model: optionalText(body?.model, 80),
+    preferredSupplierName: optionalText(body?.preferredSupplierName, 120),
+    standardCost: requireNumber(body?.standardCost, 'standardCost', 0),
+    averageCost: requireNumber(body?.averageCost, 'averageCost', 0),
+    currency: requireCurrency(body?.currency ?? 'USD'),
     quantity: requireNumber(body?.quantity, 'quantity', 0),
     reorderLevel: requireNumber(body?.reorderLevel, 'reorderLevel', 0),
-    minimumStockLevel: requireNumber(body?.minimumStockLevel, 'minimumStockLevel', 0),
-    maximumStockLevel: requireNumber(body?.maximumStockLevel, 'maximumStockLevel', 0),
+    minimumStockLevel,
+    maximumStockLevel,
     unit: requireText(body?.unit, 'unit', 1, 20),
     warehouseLocation: requireText(body?.warehouseLocation, 'warehouseLocation', 3, 30),
     status: normalizeStatus(body?.status ?? 'in_stock'),
-    isActive: Boolean(body?.isActive),
+    isActive: body?.isActive === undefined ? true : Boolean(body?.isActive),
     isBatchTracked: Boolean(body?.isBatchTracked),
     isExpiryTracked: Boolean(body?.isExpiryTracked),
     isSerialTracked: Boolean(body?.isSerialTracked),
@@ -155,7 +219,7 @@ function buildInventoryInput(body: any) {
     issueUomCode: requireActiveUomCode(body?.issueUomCode, 'issueUomCode'),
     uomConversionGroupCode: optionalActiveConversionGroupCode(body?.uomConversionGroupCode),
     allowsFraction: Boolean(body?.allowsFraction),
-    notes: String(body?.notes ?? '').trim()
+    notes: optionalText(body?.notes, 1000)
   };
 }
 
