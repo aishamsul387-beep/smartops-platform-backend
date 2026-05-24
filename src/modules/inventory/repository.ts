@@ -187,6 +187,17 @@ let memoryInventoryStore: InventoryRecord[] = [
   }
 ];
 
+const INVENTORY_MASTER_BACKFILL = memoryInventoryStore.map((item) => ({
+  id: item.id,
+  itemType: item.itemType,
+  brand: item.brand,
+  model: item.model,
+  preferredSupplierName: item.preferredSupplierName,
+  standardCost: item.standardCost,
+  averageCost: item.averageCost,
+  currency: item.currency
+}));
+
 function matchesSearch(values: string[], search?: string) {
   const normalized = String(search ?? '').trim().toLowerCase();
 
@@ -232,6 +243,50 @@ function mapRow(row: any): InventoryRecord {
     notes: String(row.notes ?? ''),
     updatedAt: new Date(row.updated_at).toISOString()
   };
+}
+
+async function backfillExistingInventoryMasterData() {
+  if (!isPostgresEnabled()) {
+    return;
+  }
+
+  for (const item of INVENTORY_MASTER_BACKFILL) {
+    await execute(
+      `
+      UPDATE inventory_items
+      SET
+        item_type = $2,
+        brand = $3,
+        model = $4,
+        preferred_supplier_name = $5,
+        standard_cost = $6,
+        average_cost = $7,
+        currency = $8,
+        updated_at = NOW()
+      WHERE id = $1
+        AND (
+          COALESCE(item_type, '') = ''
+          OR ($2 <> 'raw_material' AND item_type = 'raw_material')
+          OR COALESCE(brand, '') = ''
+          OR COALESCE(model, '') = ''
+          OR COALESCE(preferred_supplier_name, '') = ''
+          OR COALESCE(standard_cost, 0) = 0
+          OR COALESCE(average_cost, 0) = 0
+          OR COALESCE(currency, '') = ''
+        )
+      `,
+      [
+        item.id,
+        item.itemType,
+        item.brand,
+        item.model,
+        item.preferredSupplierName,
+        item.standardCost,
+        item.averageCost,
+        item.currency
+      ]
+    );
+  }
 }
 
 export async function ensureInventoryTable() {
@@ -362,6 +417,8 @@ export async function ensureInventoryTable() {
       );
     }
   }
+
+  await backfillExistingInventoryMasterData();
 
   initialized = true;
 }
