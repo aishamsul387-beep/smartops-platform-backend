@@ -13,6 +13,7 @@ export type ReorderPriority = 'critical' | 'high' | 'medium' | 'low';
 export type DemandTrend = 'rising' | 'stable' | 'falling';
 export type ProcurementAction = 'order_now' | 'order_this_week' | 'monitor';
 export type ProcurementQueueStatus = 'immediate' | 'this_week' | 'monitor';
+export type SupplierSource = 'inventory_master' | 'batch_history' | 'unassigned';
 
 export interface StockControlSummary {
   totalItems: number;
@@ -31,6 +32,9 @@ export interface StockControlSummary {
   fallingDemandItems: number;
   procurementDueToday: number;
   procurementDueThisWeek: number;
+  plannedProcurementValue: number;
+  urgentProcurementValue: number;
+  planningCurrency: string;
 }
 
 export interface StockControlAlert {
@@ -52,6 +56,7 @@ export interface ReorderSuggestion {
   itemCode: string;
   itemName: string;
   category: string;
+  itemType: string;
   currentQty: number;
   reorderLevel: number;
   minimumStockLevel: number;
@@ -62,6 +67,7 @@ export interface ReorderSuggestion {
   priority: ReorderPriority;
   reason: string;
   preferredSupplierName: string;
+  supplierSource: SupplierSource;
   supplierScore: number;
   leadTimeDays: number;
   reorderByDate: string;
@@ -72,6 +78,9 @@ export interface ReorderSuggestion {
   forecastDemand60d: number;
   forecastDemand90d: number;
   procurementAction: ProcurementAction;
+  standardCost: number;
+  currency: string;
+  estimatedReorderValue: number;
 }
 
 export interface ProcurementQueueItem {
@@ -79,7 +88,9 @@ export interface ProcurementQueueItem {
   inventoryItemId: string;
   itemCode: string;
   itemName: string;
+  itemType: string;
   preferredSupplierName: string;
+  supplierSource: SupplierSource;
   suggestedOrderQty: number;
   reorderByDate: string;
   leadTimeDays: number;
@@ -88,6 +99,9 @@ export interface ProcurementQueueItem {
   procurementAction: ProcurementAction;
   queueStatus: ProcurementQueueStatus;
   riskNote: string;
+  standardCost: number;
+  currency: string;
+  estimatedOrderValue: number;
 }
 
 function daysBetween(from: Date, to: Date) {
@@ -140,19 +154,24 @@ function calculateSuggestedOrderQty(
   return Math.ceil(suggestion);
 }
 
-function getLeadTimeDays(category: string) {
-  const normalized = category.trim().toLowerCase();
+function getLeadTimeDays(itemType: string, category: string) {
+  const normalizedType = itemType.trim().toLowerCase();
+  const normalizedCategory = category.trim().toLowerCase();
 
-  if (normalized.includes('raw')) {
+  if (normalizedType === 'raw_material' || normalizedCategory.includes('raw')) {
     return 14;
   }
 
-  if (normalized.includes('pack')) {
+  if (normalizedType === 'packaging' || normalizedCategory.includes('pack')) {
     return 7;
   }
 
-  if (normalized.includes('finished')) {
+  if (normalizedType === 'finished_goods' || normalizedCategory.includes('finished')) {
     return 10;
+  }
+
+  if (normalizedType === 'spare_part') {
+    return 9;
   }
 
   return 12;
@@ -164,16 +183,23 @@ function decideDemandTrend(item: {
   minimumStockLevel: number;
   maximumStockLevel: number;
   category: string;
+  itemType: string;
 }): DemandTrend {
   const category = item.category.trim().toLowerCase();
+  const itemType = item.itemType.trim().toLowerCase();
 
-  if (item.quantity <= item.minimumStockLevel || category.includes('raw')) {
+  if (
+    item.quantity <= item.minimumStockLevel ||
+    category.includes('raw') ||
+    itemType === 'raw_material'
+  ) {
     return 'rising';
   }
 
   if (
     (item.maximumStockLevel > 0 && item.quantity > item.maximumStockLevel) ||
-    category.includes('finished')
+    category.includes('finished') ||
+    itemType === 'finished_goods'
   ) {
     return 'falling';
   }
@@ -192,25 +218,27 @@ function estimateForecastDemand(days: number, monthlyUsage: number, trend: Deman
   return Math.ceil(base * forecastMultiplier(trend));
 }
 
-function getPreferredSupplierName(inventoryItemId: string, fallback = 'Unassigned supplier') {
-  return fallbackMap[inventoryItemId] || fallback;
-}
-
-function getSupplierScore(preferredSupplierName: string) {
-  if (!preferredSupplierName || preferredSupplierName === 'Unassigned supplier') {
+function getSupplierScore(preferredSupplierName: string, supplierSource: SupplierSource) {
+  if (supplierSource === 'unassigned' || !preferredSupplierName) {
     return 45;
   }
 
-  if (preferredSupplierName.toLowerCase().includes('prime')) {
+  const normalized = preferredSupplierName.toLowerCase();
+
+  if (normalized.includes('prime')) {
     return 92;
   }
 
-  if (preferredSupplierName.toLowerCase().includes('pack')) {
+  if (normalized.includes('pack')) {
     return 84;
   }
 
-  if (preferredSupplierName.toLowerCase().includes('valve')) {
+  if (normalized.includes('valve')) {
     return 78;
+  }
+
+  if (supplierSource === 'inventory_master') {
+    return 75;
   }
 
   return 70;
@@ -218,7 +246,9 @@ function getSupplierScore(preferredSupplierName: string) {
 
 let fallbackMap: Record<string, string> = {};
 
-function buildSupplierFallbackMap(batchSupplierPairs: { inventoryItemId: string; supplierName: string; updatedAt: string }[]) {
+function buildSupplierFallbackMap(
+  batchSupplierPairs: { inventoryItemId: string; supplierName: string; updatedAt: string }[]
+) {
   const sorted = [...batchSupplierPairs].sort((a, b) => {
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   });
@@ -232,6 +262,34 @@ function buildSupplierFallbackMap(batchSupplierPairs: { inventoryItemId: string;
   }
 
   fallbackMap = map;
+}
+
+function getPreferredSupplierProfile(item: {
+  id: string;
+  preferredSupplierName?: string;
+}) {
+  const fromInventoryMaster = String(item.preferredSupplierName ?? '').trim();
+
+  if (fromInventoryMaster) {
+    return {
+      preferredSupplierName: fromInventoryMaster,
+      supplierSource: 'inventory_master' as SupplierSource
+    };
+  }
+
+  const fromBatchHistory = String(fallbackMap[item.id] ?? '').trim();
+
+  if (fromBatchHistory) {
+    return {
+      preferredSupplierName: fromBatchHistory,
+      supplierSource: 'batch_history' as SupplierSource
+    };
+  }
+
+  return {
+    preferredSupplierName: 'Unassigned supplier',
+    supplierSource: 'unassigned' as SupplierSource
+  };
 }
 
 function buildRiskNote(priority: ReorderPriority, daysOfCover: number, leadTimeDays: number) {
@@ -250,7 +308,11 @@ function buildRiskNote(priority: ReorderPriority, daysOfCover: number, leadTimeD
   return 'Monitor and replenish within normal planning cycle.';
 }
 
-function buildProcurementAction(priority: ReorderPriority, daysOfCover: number, leadTimeDays: number): ProcurementAction {
+function buildProcurementAction(
+  priority: ReorderPriority,
+  daysOfCover: number,
+  leadTimeDays: number
+): ProcurementAction {
   if (priority === 'critical') {
     return 'order_now';
   }
@@ -288,6 +350,16 @@ function buildQueueStatus(reorderByDate: string): ProcurementQueueStatus {
   return 'monitor';
 }
 
+function getPlanningCurrency(
+  inventory: Array<{ currency?: string }>,
+  suggestions: Array<{ currency: string }>
+) {
+  const firstInventoryCurrency = inventory.find((item) => String(item.currency ?? '').trim())?.currency;
+  const firstSuggestionCurrency = suggestions.find((item) => String(item.currency ?? '').trim())?.currency;
+
+  return String(firstInventoryCurrency ?? firstSuggestionCurrency ?? 'USD').trim().toUpperCase() || 'USD';
+}
+
 export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
   const inventory = await listInventory({ status: 'all', search: '' });
   const batches = await listBatches({ status: 'all', search: '' });
@@ -323,16 +395,33 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         item.minimumStockLevel
       );
 
-      const demandTrend = decideDemandTrend(item);
+      const demandTrend = decideDemandTrend({
+        quantity: item.quantity,
+        reorderLevel: item.reorderLevel,
+        minimumStockLevel: item.minimumStockLevel,
+        maximumStockLevel: item.maximumStockLevel,
+        category: item.category,
+        itemType: String(item.itemType ?? '')
+      });
+
       const monthlyUsageEstimate = Math.ceil(dailyUsage * 30 * forecastMultiplier(demandTrend));
       const forecastDemand30d = estimateForecastDemand(30, monthlyUsageEstimate, demandTrend);
       const forecastDemand60d = estimateForecastDemand(60, monthlyUsageEstimate, demandTrend);
       const forecastDemand90d = estimateForecastDemand(90, monthlyUsageEstimate, demandTrend);
 
-      const leadTimeDays = getLeadTimeDays(item.category);
+      const leadTimeDays = getLeadTimeDays(String(item.itemType ?? ''), item.category);
       const reorderByDate = formatReorderByDate(daysOfCover - leadTimeDays);
-      const preferredSupplierName = getPreferredSupplierName(item.id);
-      const supplierScore = getSupplierScore(preferredSupplierName);
+
+      const supplierProfile = getPreferredSupplierProfile({
+        id: item.id,
+        preferredSupplierName: item.preferredSupplierName
+      });
+
+      const supplierScore = getSupplierScore(
+        supplierProfile.preferredSupplierName,
+        supplierProfile.supplierSource
+      );
+
       const riskNote = buildRiskNote(priority, daysOfCover, leadTimeDays);
       const procurementAction = buildProcurementAction(priority, daysOfCover, leadTimeDays);
 
@@ -346,12 +435,17 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         reason = 'At or below reorder level based on planning rule.';
       }
 
+      const standardCost = Number(item.standardCost ?? 0);
+      const currency = String(item.currency ?? 'USD').trim().toUpperCase() || 'USD';
+      const estimatedReorderValue = Number((suggestedOrderQty * standardCost).toFixed(2));
+
       return {
         id: `reorder-${item.id}`,
         inventoryItemId: item.id,
         itemCode: item.sku,
         itemName: item.name,
         category: item.category,
+        itemType: String(item.itemType ?? ''),
         currentQty: item.quantity,
         reorderLevel: item.reorderLevel,
         minimumStockLevel: item.minimumStockLevel,
@@ -361,7 +455,8 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         estimatedDaysOfCover: daysOfCover,
         priority,
         reason,
-        preferredSupplierName,
+        preferredSupplierName: supplierProfile.preferredSupplierName,
+        supplierSource: supplierProfile.supplierSource,
         supplierScore,
         leadTimeDays,
         reorderByDate,
@@ -371,7 +466,10 @@ export async function getReorderSuggestions(): Promise<ReorderSuggestion[]> {
         forecastDemand30d,
         forecastDemand60d,
         forecastDemand90d,
-        procurementAction
+        procurementAction,
+        standardCost,
+        currency,
+        estimatedReorderValue
       };
     });
 
@@ -391,7 +489,9 @@ export async function getProcurementActionQueue(): Promise<ProcurementQueueItem[
     inventoryItemId: item.inventoryItemId,
     itemCode: item.itemCode,
     itemName: item.itemName,
+    itemType: item.itemType,
     preferredSupplierName: item.preferredSupplierName,
+    supplierSource: item.supplierSource,
     suggestedOrderQty: item.suggestedOrderQty,
     reorderByDate: item.reorderByDate,
     leadTimeDays: item.leadTimeDays,
@@ -399,7 +499,10 @@ export async function getProcurementActionQueue(): Promise<ProcurementQueueItem[
     supplierScore: item.supplierScore,
     procurementAction: item.procurementAction,
     queueStatus: buildQueueStatus(item.reorderByDate),
-    riskNote: item.riskNote
+    riskNote: item.riskNote,
+    standardCost: item.standardCost,
+    currency: item.currency,
+    estimatedOrderValue: item.estimatedReorderValue
   }));
 }
 
@@ -455,6 +558,19 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
   const procurementDueToday = procurementQueue.filter((q) => q.queueStatus === 'immediate').length;
   const procurementDueThisWeek = procurementQueue.filter((q) => q.queueStatus === 'this_week').length;
 
+  const plannedProcurementValue = Number(
+    reorderSuggestions.reduce((sum, item) => sum + item.estimatedReorderValue, 0).toFixed(2)
+  );
+
+  const urgentProcurementValue = Number(
+    procurementQueue
+      .filter((item) => item.queueStatus === 'immediate' || item.queueStatus === 'this_week')
+      .reduce((sum, item) => sum + item.estimatedOrderValue, 0)
+      .toFixed(2)
+  );
+
+  const planningCurrency = getPlanningCurrency(inventory, reorderSuggestions);
+
   return {
     totalItems: inventory.length,
     totalOnHandQty,
@@ -471,7 +587,10 @@ export async function getStockControlSummary(): Promise<StockControlSummary> {
     stableDemandItems,
     fallingDemandItems,
     procurementDueToday,
-    procurementDueThisWeek
+    procurementDueThisWeek,
+    plannedProcurementValue,
+    urgentProcurementValue,
+    planningCurrency
   };
 }
 
