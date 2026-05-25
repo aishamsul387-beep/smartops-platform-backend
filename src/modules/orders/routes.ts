@@ -8,6 +8,7 @@ import {
   getGRNById,
   getOrdersSummary,
   getPurchaseOrderById,
+  issuePurchaseOrder,
   listGRNs,
   listPurchaseOrders,
   listQuotations,
@@ -142,6 +143,59 @@ ordersRouter.post(
       });
     }
 
+    const rawLines = Array.isArray(request.body?.lines) ? request.body.lines : [];
+    const lines = rawLines.map((line: any, index: number) => {
+      const itemCode = String(line?.itemCode ?? '').trim();
+      const itemName = String(line?.itemName ?? '').trim();
+      const orderedQty = Number(line?.orderedQty);
+      const unitCost = Number(line?.unitCost);
+      const lineCurrency = String(line?.currency ?? currency).trim() || currency;
+      const notes = String(line?.notes ?? '').trim();
+
+      if (!itemCode) {
+        throw new AppError({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: `lines[${index}].itemCode is required`
+        });
+      }
+
+      if (!itemName) {
+        throw new AppError({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: `lines[${index}].itemName is required`
+        });
+      }
+
+      if (Number.isNaN(orderedQty) || orderedQty <= 0) {
+        throw new AppError({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: `lines[${index}].orderedQty must be greater than 0`
+        });
+      }
+
+      if (Number.isNaN(unitCost) || unitCost < 0) {
+        throw new AppError({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: `lines[${index}].unitCost must be 0 or greater`
+        });
+      }
+
+      return {
+        inventoryItemId: String(line?.inventoryItemId ?? '').trim(),
+        itemCode,
+        itemName,
+        orderedQty,
+        unitCost,
+        currency: lineCurrency,
+        lineTotal: Number(line?.lineTotal ?? Number((orderedQty * unitCost).toFixed(2))),
+        notes
+      };
+    });
+
     const item = createPurchaseOrder({
       supplierName,
       quotationNo: quotationNo || undefined,
@@ -149,10 +203,47 @@ ordersRouter.post(
       totalAmount,
       currency,
       expectedDate,
-      status
+      status,
+      lines
     });
 
     return created(response, item);
+  })
+);
+
+ordersRouter.patch(
+  '/purchase-orders/:id/issue',
+  asyncHandler(async (request, response) => {
+    const id = readSingle(request.params.id as string | string[] | undefined);
+    const existing = getPurchaseOrderById(id);
+
+    if (!existing) {
+      throw new AppError({
+        status: 404,
+        code: 'PURCHASE_ORDER_NOT_FOUND',
+        message: 'Purchase order not found'
+      });
+    }
+
+    if (existing.status !== 'draft') {
+      throw new AppError({
+        status: 400,
+        code: 'PURCHASE_ORDER_NOT_DRAFT',
+        message: 'Only draft purchase orders can be issued'
+      });
+    }
+
+    const item = issuePurchaseOrder(id);
+
+    if (!item) {
+      throw new AppError({
+        status: 404,
+        code: 'PURCHASE_ORDER_NOT_FOUND',
+        message: 'Purchase order not found'
+      });
+    }
+
+    return ok(response, item, 200);
   })
 );
 
