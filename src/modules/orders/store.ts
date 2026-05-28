@@ -24,6 +24,7 @@ export interface PurchaseOrderLineRecord {
   itemCode: string;
   itemName: string;
   orderedQty: number;
+  receivedQty: number;
   unitCost: number;
   currency: string;
   lineTotal: number;
@@ -60,6 +61,7 @@ export interface GRNRecord {
   id: string;
   grnNo: string;
   poNo: string;
+  purchaseOrderLineId: string;
   inventoryItemId: string;
   supplierName: string;
   batchNumber: string;
@@ -112,6 +114,7 @@ export interface CreatePurchaseOrderInput {
 
 export interface CreateGRNInput {
   poNo: string;
+  purchaseOrderLineId: string;
   inventoryItemId: string;
   supplierName: string;
   batchNumber: string;
@@ -172,7 +175,7 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
     itemCount: 1,
     totalAmount: 12500,
     currency: 'USD',
-    status: 'issued',
+    status: 'received',
     expectedDate: '2026-05-25T00:00:00.000Z',
     createdAt: '2026-05-21T11:20:00.000Z',
     planningContext: null,
@@ -184,6 +187,7 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
         itemCode: 'RM-STEEL-001',
         itemName: 'Steel Sheet A',
         orderedQty: 240,
+        receivedQty: 240,
         unitCost: 52.08,
         currency: 'USD',
         lineTotal: 12500,
@@ -211,6 +215,7 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
         itemCode: 'PK-BOX-010',
         itemName: 'Carton Box Medium',
         orderedQty: 900,
+        receivedQty: 450,
         unitCost: 2,
         currency: 'USD',
         lineTotal: 1800,
@@ -226,7 +231,7 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
     itemCount: 1,
     totalAmount: 9300,
     currency: 'USD',
-    status: 'draft',
+    status: 'issued',
     expectedDate: '2026-05-28T00:00:00.000Z',
     createdAt: '2026-05-21T13:00:00.000Z',
     planningContext: null,
@@ -238,6 +243,7 @@ let purchaseOrderStore: PurchaseOrderRecord[] = [
         itemCode: 'FG-VALVE-221',
         itemName: 'Control Valve X',
         orderedQty: 84,
+        receivedQty: 0,
         unitCost: 110.71,
         currency: 'USD',
         lineTotal: 9300,
@@ -252,6 +258,7 @@ let grnStore: GRNRecord[] = [
     id: 'grn-001',
     grnNo: 'GRN-2026-001',
     poNo: 'PO-2026-001',
+    purchaseOrderLineId: 'pol-001',
     inventoryItemId: 'inv-001',
     supplierName: 'Prime Steel Supply',
     batchNumber: 'BATCH-STEEL-001',
@@ -275,6 +282,7 @@ let grnStore: GRNRecord[] = [
     id: 'grn-002',
     grnNo: 'GRN-2026-002',
     poNo: 'PO-2026-003',
+    purchaseOrderLineId: 'pol-003',
     inventoryItemId: 'inv-003',
     supplierName: 'ValveCore Manufacturing',
     batchNumber: 'BATCH-VALVE-001',
@@ -312,6 +320,94 @@ function nextPONumber() {
 
 function nextGRNNumber() {
   return `GRN-${new Date().getFullYear()}-${String(grnStore.length + 1).padStart(3, '0')}`;
+}
+
+function mapCreatePurchaseOrderLines(
+  lines: CreatePurchaseOrderLineInput[] | undefined,
+  currency: string
+): PurchaseOrderLineRecord[] {
+  const now = Date.now();
+
+  return (lines ?? []).map((line, index) => {
+    const orderedQty = Number(line.orderedQty);
+    const unitCost = Number(line.unitCost);
+    const lineTotal =
+      line.lineTotal !== undefined
+        ? Number(line.lineTotal)
+        : Number((orderedQty * unitCost).toFixed(2));
+
+    return {
+      id: `pol-${now}-${index + 1}`,
+      lineNo: index + 1,
+      inventoryItemId: line.inventoryItemId,
+      itemCode: line.itemCode,
+      itemName: line.itemName,
+      orderedQty,
+      receivedQty: 0,
+      unitCost,
+      currency: line.currency || currency,
+      lineTotal,
+      notes: line.notes || ''
+    };
+  });
+}
+
+function recalculatePurchaseOrderStatus(current: PurchaseOrderRecord): PurchaseOrderStatus {
+  if (!current.lines.length) {
+    return current.status;
+  }
+
+  const allReceived = current.lines.every((line) => line.receivedQty >= line.orderedQty);
+  const anyReceived = current.lines.some((line) => line.receivedQty > 0);
+
+  if (allReceived) {
+    return 'received';
+  }
+
+  if (anyReceived) {
+    return 'partially_received';
+  }
+
+  return current.status === 'draft' ? 'draft' : 'issued';
+}
+
+function applyReceiptToPurchaseOrder(poNo: string, purchaseOrderLineId: string, receivedQty: number) {
+  const poIndex = purchaseOrderStore.findIndex((item) => item.poNo === poNo);
+
+  if (poIndex === -1) {
+    return null;
+  }
+
+  const purchaseOrder = purchaseOrderStore[poIndex];
+  const lineIndex = purchaseOrder.lines.findIndex(
+    (line) => line.id === purchaseOrderLineId
+  );
+
+  if (lineIndex === -1) {
+    return null;
+  }
+
+  const nextLines = [...purchaseOrder.lines];
+  const currentLine = nextLines[lineIndex];
+
+  nextLines[lineIndex] = {
+    ...currentLine,
+    receivedQty: currentLine.receivedQty + receivedQty
+  };
+
+  const updated: PurchaseOrderRecord = {
+    ...purchaseOrder,
+    lines: nextLines
+  };
+
+  updated.status = recalculatePurchaseOrderStatus(updated);
+  purchaseOrderStore[poIndex] = updated;
+
+  return updated;
+}
+
+export function getPurchaseOrderByNumber(poNo: string) {
+  return purchaseOrderStore.find((item) => item.poNo === poNo) ?? null;
 }
 
 export function getOrdersSummary(): OrdersDashboardSummary {
@@ -367,29 +463,7 @@ export function getPurchaseOrderById(id: string) {
 }
 
 export function createPurchaseOrder(input: CreatePurchaseOrderInput) {
-  const now = Date.now();
-
-  const lines: PurchaseOrderLineRecord[] = (input.lines ?? []).map((line, index) => {
-    const unitCost = Number(line.unitCost);
-    const orderedQty = Number(line.orderedQty);
-    const lineTotal =
-      line.lineTotal !== undefined
-        ? Number(line.lineTotal)
-        : Number((orderedQty * unitCost).toFixed(2));
-
-    return {
-      id: `pol-${now}-${index + 1}`,
-      lineNo: index + 1,
-      inventoryItemId: line.inventoryItemId,
-      itemCode: line.itemCode,
-      itemName: line.itemName,
-      orderedQty,
-      unitCost,
-      currency: line.currency || input.currency,
-      lineTotal,
-      notes: line.notes || ''
-    };
-  });
+  const lines = mapCreatePurchaseOrderLines(input.lines, input.currency);
 
   const totalAmount =
     lines.length > 0
@@ -399,7 +473,7 @@ export function createPurchaseOrder(input: CreatePurchaseOrderInput) {
   const itemCount = lines.length > 0 ? lines.length : input.itemCount;
 
   const record: PurchaseOrderRecord = {
-    id: 'po-' + now,
+    id: 'po-' + Date.now(),
     poNo: nextPONumber(),
     supplierName: input.supplierName,
     quotationNo: input.quotationNo || undefined,
@@ -441,6 +515,7 @@ export function listGRNs(filters?: { search?: string; status?: string }) {
       [
         item.grnNo,
         item.poNo,
+        item.purchaseOrderLineId,
         item.inventoryItemId,
         item.supplierName,
         item.batchNumber,
@@ -467,6 +542,7 @@ export async function createGRN(input: CreateGRNInput) {
     id: 'grn-' + Date.now(),
     grnNo: nextGRNNumber(),
     poNo: input.poNo,
+    purchaseOrderLineId: input.purchaseOrderLineId,
     inventoryItemId: input.inventoryItemId,
     supplierName: input.supplierName,
     batchNumber: input.batchNumber,
@@ -516,6 +592,7 @@ export async function createGRN(input: CreateGRNInput) {
     });
 
     record.linkedBatchId = batch.id;
+    applyReceiptToPurchaseOrder(record.poNo, record.purchaseOrderLineId, record.receivedQty);
   }
 
   grnStore = [record, ...grnStore];

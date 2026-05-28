@@ -8,6 +8,7 @@ import {
   getGRNById,
   getOrdersSummary,
   getPurchaseOrderById,
+  getPurchaseOrderByNumber,
   issuePurchaseOrder,
   listGRNs,
   listPurchaseOrders,
@@ -281,6 +282,7 @@ ordersRouter.post(
   '/goods-received-notes',
   asyncHandler(async (request, response) => {
     const poNo = String(request.body?.poNo ?? '').trim();
+    const purchaseOrderLineId = String(request.body?.purchaseOrderLineId ?? '').trim();
     const inventoryItemId = String(request.body?.inventoryItemId ?? '').trim();
     const supplierName = String(request.body?.supplierName ?? '').trim();
     const batchNumber = String(request.body?.batchNumber ?? '').trim();
@@ -306,11 +308,59 @@ ordersRouter.post(
       });
     }
 
+    const purchaseOrder = getPurchaseOrderByNumber(poNo);
+
+    if (!purchaseOrder) {
+      throw new AppError({
+        status: 404,
+        code: 'PURCHASE_ORDER_NOT_FOUND',
+        message: 'Referenced purchase order was not found'
+      });
+    }
+
+    if (purchaseOrder.status === 'draft') {
+      throw new AppError({
+        status: 400,
+        code: 'PURCHASE_ORDER_NOT_ISSUED',
+        message: 'Purchase order must be issued before receiving goods'
+      });
+    }
+
+    if (!purchaseOrderLineId) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'purchaseOrderLineId is required'
+      });
+    }
+
     if (!inventoryItemId) {
       throw new AppError({
         status: 400,
         code: 'VALIDATION_ERROR',
         message: 'inventoryItemId is required'
+      });
+    }
+
+    const matchingLine = purchaseOrder.lines.find(
+      (line) => line.id === purchaseOrderLineId && line.inventoryItemId === inventoryItemId
+    );
+
+    if (!matchingLine) {
+      throw new AppError({
+        status: 400,
+        code: 'PURCHASE_ORDER_LINE_NOT_FOUND',
+        message: 'Selected purchase order line does not match the referenced inventory item'
+      });
+    }
+
+    const remainingQty = Math.max(matchingLine.orderedQty - matchingLine.receivedQty, 0);
+
+    if (remainingQty <= 0) {
+      throw new AppError({
+        status: 400,
+        code: 'PURCHASE_ORDER_LINE_FULLY_RECEIVED',
+        message: 'Selected purchase order line is already fully received'
       });
     }
 
@@ -330,19 +380,27 @@ ordersRouter.post(
       });
     }
 
-    if (Number.isNaN(receivedLines) || receivedLines < 0) {
+    if (Number.isNaN(receivedLines) || receivedLines <= 0) {
       throw new AppError({
         status: 400,
         code: 'VALIDATION_ERROR',
-        message: 'receivedLines must be a valid number 0 or greater'
+        message: 'receivedLines must be greater than 0'
       });
     }
 
-    if (Number.isNaN(receivedQty) || receivedQty < 0) {
+    if (Number.isNaN(receivedQty) || receivedQty <= 0) {
       throw new AppError({
         status: 400,
         code: 'VALIDATION_ERROR',
-        message: 'receivedQty must be a valid number 0 or greater'
+        message: 'receivedQty must be greater than 0'
+      });
+    }
+
+    if (receivedQty > remainingQty) {
+      throw new AppError({
+        status: 400,
+        code: 'OVER_RECEIPT_NOT_ALLOWED',
+        message: `Received quantity cannot exceed remaining PO quantity (${remainingQty})`
       });
     }
 
@@ -356,6 +414,7 @@ ordersRouter.post(
 
     const item = await createGRN({
       poNo,
+      purchaseOrderLineId,
       inventoryItemId,
       supplierName,
       batchNumber,
