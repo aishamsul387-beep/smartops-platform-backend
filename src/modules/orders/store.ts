@@ -17,6 +17,16 @@ export interface PlanningContextRecord {
   reorderByDate: string;
 }
 
+export interface PurchaseOrderLineReceiptRecord {
+  grnId: string;
+  grnNo: string;
+  receivedQty: number;
+  receivedDate: string | null;
+  status: GRNStatus;
+  linkedBatchId: string | null;
+  postedAt: string;
+}
+
 export interface PurchaseOrderLineRecord {
   id: string;
   lineNo: number;
@@ -25,6 +35,21 @@ export interface PurchaseOrderLineRecord {
   itemName: string;
   orderedQty: number;
   receivedQty: number;
+  unitCost: number;
+  currency: string;
+  lineTotal: number;
+  notes: string;
+  receiptHistory?: PurchaseOrderLineReceiptRecord[];
+}
+
+export interface PurchaseOrderLineContextRecord {
+  purchaseOrderLineId: string;
+  lineNo: number;
+  itemCode: string;
+  itemName: string;
+  orderedQty: number;
+  receivedQty: number;
+  remainingQty: number;
   unitCost: number;
   currency: string;
   lineTotal: number;
@@ -80,6 +105,7 @@ export interface GRNRecord {
   bin: string;
   linkedBatchId: string | null;
   postedAt: string;
+  purchaseOrderLineContext?: PurchaseOrderLineContextRecord | null;
 }
 
 export interface OrdersDashboardSummary {
@@ -379,9 +405,7 @@ function applyReceiptToPurchaseOrder(poNo: string, purchaseOrderLineId: string, 
   }
 
   const purchaseOrder = purchaseOrderStore[poIndex];
-  const lineIndex = purchaseOrder.lines.findIndex(
-    (line) => line.id === purchaseOrderLineId
-  );
+  const lineIndex = purchaseOrder.lines.findIndex((line) => line.id === purchaseOrderLineId);
 
   if (lineIndex === -1) {
     return null;
@@ -404,6 +428,66 @@ function applyReceiptToPurchaseOrder(poNo: string, purchaseOrderLineId: string, 
   purchaseOrderStore[poIndex] = updated;
 
   return updated;
+}
+
+function getPurchaseOrderLineContext(poNo: string, purchaseOrderLineId: string): PurchaseOrderLineContextRecord | null {
+  const purchaseOrder = purchaseOrderStore.find((item) => item.poNo === poNo);
+
+  if (!purchaseOrder) {
+    return null;
+  }
+
+  const line = purchaseOrder.lines.find((item) => item.id === purchaseOrderLineId);
+
+  if (!line) {
+    return null;
+  }
+
+  return {
+    purchaseOrderLineId: line.id,
+    lineNo: line.lineNo,
+    itemCode: line.itemCode,
+    itemName: line.itemName,
+    orderedQty: line.orderedQty,
+    receivedQty: line.receivedQty,
+    remainingQty: Math.max(line.orderedQty - line.receivedQty, 0),
+    unitCost: line.unitCost,
+    currency: line.currency,
+    lineTotal: line.lineTotal,
+    notes: line.notes
+  };
+}
+
+function buildReceiptHistory(poNo: string, purchaseOrderLineId: string): PurchaseOrderLineReceiptRecord[] {
+  return grnStore
+    .filter((item) => item.poNo === poNo && item.purchaseOrderLineId === purchaseOrderLineId)
+    .sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime())
+    .map((item) => ({
+      grnId: item.id,
+      grnNo: item.grnNo,
+      receivedQty: item.receivedQty,
+      receivedDate: item.receivedDate,
+      status: item.status,
+      linkedBatchId: item.linkedBatchId,
+      postedAt: item.postedAt
+    }));
+}
+
+function enrichPurchaseOrder(item: PurchaseOrderRecord): PurchaseOrderRecord {
+  return {
+    ...item,
+    lines: item.lines.map((line) => ({
+      ...line,
+      receiptHistory: buildReceiptHistory(item.poNo, line.id)
+    }))
+  };
+}
+
+function enrichGRN(item: GRNRecord): GRNRecord {
+  return {
+    ...item,
+    purchaseOrderLineContext: getPurchaseOrderLineContext(item.poNo, item.purchaseOrderLineId)
+  };
 }
 
 export function getPurchaseOrderByNumber(poNo: string) {
@@ -459,7 +543,8 @@ export function listPurchaseOrders(filters?: { search?: string; status?: string 
 }
 
 export function getPurchaseOrderById(id: string) {
-  return purchaseOrderStore.find((item) => item.id === id) ?? null;
+  const item = purchaseOrderStore.find((row) => row.id === id) ?? null;
+  return item ? enrichPurchaseOrder(item) : null;
 }
 
 export function createPurchaseOrder(input: CreatePurchaseOrderInput) {
@@ -534,7 +619,8 @@ export function listGRNs(filters?: { search?: string; status?: string }) {
 }
 
 export function getGRNById(id: string) {
-  return grnStore.find((item) => item.id === id) ?? null;
+  const item = grnStore.find((row) => row.id === id) ?? null;
+  return item ? enrichGRN(item) : null;
 }
 
 export async function createGRN(input: CreateGRNInput) {
@@ -560,7 +646,8 @@ export async function createGRN(input: CreateGRNInput) {
     levelCode: input.levelCode,
     bin: input.bin,
     linkedBatchId: null,
-    postedAt: new Date().toISOString()
+    postedAt: new Date().toISOString(),
+    purchaseOrderLineContext: null
   };
 
   if (record.status === 'posted') {
@@ -594,6 +681,11 @@ export async function createGRN(input: CreateGRNInput) {
     record.linkedBatchId = batch.id;
     applyReceiptToPurchaseOrder(record.poNo, record.purchaseOrderLineId, record.receivedQty);
   }
+
+  record.purchaseOrderLineContext = getPurchaseOrderLineContext(
+    record.poNo,
+    record.purchaseOrderLineId
+  );
 
   grnStore = [record, ...grnStore];
   return record;
