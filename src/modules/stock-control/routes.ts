@@ -9,6 +9,11 @@ import {
   getStockControlAlerts,
   getStockControlSummary
 } from './service';
+import {
+  getBatchStockMovements,
+  getInventoryStockMovements,
+  getStockMovements
+} from './movement-service';
 
 export const stockControlRouter = Router();
 
@@ -70,5 +75,34 @@ stockControlRouter.get(
   asyncHandler(async (_request, response) => {
     const actions = await getProcurementActionQueue();
     return ok(response, actions, 200);
+  })
+);
+
+stockControlRouter.get(
+  '/movements',
+  asyncHandler(async (_request, response) => {
+    const items = await getStockMovements();
+    return ok(response, items, 200);
+  })
+);
+
+stockControlRouter.get(
+  '/movements/inventory/:inventoryItemId',
+  asyncHandler(async (request, response) => {
+    const inventoryItemId = readSingle(
+      request.params.inventoryItemId as string | string[] | undefined
+    );
+
+    const items = await getInventoryStockMovements(inventoryItemId);
+    return ok(response, items, 200);
+  })
+);
+
+stockControlRouter.get(
+  '/movements/batch/:batchId',
+  asyncHandler(async (request, response) => {
+    const batchId = readSingle(request.params.batchId as string | string[] | undefined);
+    const items = await getBatchStockMovements(batchId);
+    return ok(response, items, 200);
   })
 );

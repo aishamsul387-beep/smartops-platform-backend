@@ -116,6 +116,28 @@ export interface DraftPurchaseOrderResult {
     status: string;
     expectedDate: string;
     createdAt: string;
+    planningContext: {
+      planningSource: 'stock_control';
+      inventoryItemId: string;
+      itemCode: string;
+      itemName: string;
+      suggestedOrderQty: number;
+      supplierSource: SupplierSource;
+      estimatedReorderValue: number;
+      reorderByDate: string;
+    } | null;
+    lines: Array<{
+      id: string;
+      lineNo: number;
+      inventoryItemId: string;
+      itemCode: string;
+      itemName: string;
+      orderedQty: number;
+      unitCost: number;
+      currency: string;
+      lineTotal: number;
+      notes: string;
+    }>;
   };
   sourceSuggestion: {
     inventoryItemId: string;
@@ -564,7 +586,29 @@ export async function createDraftPurchaseOrderFromSuggestion(
     totalAmount: suggestion.estimatedReorderValue,
     currency: suggestion.currency,
     expectedDate: toExpectedDateIso(suggestion.reorderByDate),
-    status: 'draft'
+    status: 'draft',
+    planningContext: {
+      planningSource: 'stock_control',
+      inventoryItemId: suggestion.inventoryItemId,
+      itemCode: suggestion.itemCode,
+      itemName: suggestion.itemName,
+      suggestedOrderQty: suggestion.suggestedOrderQty,
+      supplierSource: suggestion.supplierSource,
+      estimatedReorderValue: suggestion.estimatedReorderValue,
+      reorderByDate: suggestion.reorderByDate
+    },
+    lines: [
+      {
+        inventoryItemId: suggestion.inventoryItemId,
+        itemCode: suggestion.itemCode,
+        itemName: suggestion.itemName,
+        orderedQty: suggestion.suggestedOrderQty,
+        unitCost: suggestion.standardCost,
+        currency: suggestion.currency,
+        lineTotal: suggestion.estimatedReorderValue,
+        notes: 'Auto-created from stock control planning'
+      }
+    ]
   });
 
   return {
@@ -577,7 +621,9 @@ export async function createDraftPurchaseOrderFromSuggestion(
       currency: purchaseOrder.currency,
       status: purchaseOrder.status,
       expectedDate: purchaseOrder.expectedDate,
-      createdAt: purchaseOrder.createdAt
+      createdAt: purchaseOrder.createdAt,
+      planningContext: purchaseOrder.planningContext,
+      lines: purchaseOrder.lines
     },
     sourceSuggestion: {
       inventoryItemId: suggestion.inventoryItemId,
