@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { created, ok } from '../../common/http/api-response';
 import { asyncHandler } from '../../common/utils/async-handler';
 import { AppError } from '../../common/errors/app-error';
@@ -13,6 +13,7 @@ import {
   listGRNs,
   listPurchaseOrders,
   listQuotations,
+  postGRN,
   type GRNStatus,
   type PurchaseOrderStatus
 } from './store';
@@ -265,6 +266,24 @@ ordersRouter.get(
   asyncHandler(async (request, response) => {
     const id = readSingle(request.params.id as string | string[] | undefined);
     const item = getGRNById(id);
+
+    if (!item) {
+      throw new AppError({
+        status: 404,
+        code: 'GRN_NOT_FOUND',
+        message: 'Goods received note not found'
+      });
+    }
+
+    return ok(response, item, 200);
+  })
+);
+
+ordersRouter.patch(
+  '/goods-received-notes/:id/post',
+  asyncHandler(async (request, response) => {
+    const id = readSingle(request.params.id as string | string[] | undefined);
+    const item = await postGRN(id);
 
     if (!item) {
       throw new AppError({

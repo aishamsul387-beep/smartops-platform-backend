@@ -1,4 +1,4 @@
-import { createBatch, type BatchStatus } from '../batches/repository';
+﻿import { createBatch, type BatchStatus } from '../batches/repository';
 
 export type QuotationStatus = 'draft' | 'sent' | 'approved' | 'rejected';
 export type PurchaseOrderStatus = 'draft' | 'issued' | 'partially_received' | 'received';
@@ -623,6 +623,38 @@ export function getGRNById(id: string) {
   return item ? enrichGRN(item) : null;
 }
 
+async function createLinkedBatchForGRNRecord(record: GRNRecord) {
+  const batch = await createBatch({
+    inventoryItemId: record.inventoryItemId,
+    batchNumber: record.batchNumber,
+    lotNumber: record.lotNumber,
+    supplierLotNumber: record.supplierLotNumber,
+    manufactureDate: record.manufactureDate,
+    expiryDate: record.expiryDate,
+    receivedDate: record.receivedDate,
+    supplierName: record.supplierName,
+    purchaseOrderNo: record.poNo,
+    goodsReceivedNoteNo: record.grnNo,
+    unitCost: 0,
+    currency: 'USD',
+    receivedQty: record.receivedQty,
+    availableQty: record.receivedQty,
+    reservedQty: 0,
+    blockedQty: 0,
+    qaHoldQty: 0,
+    batchStatus: 'available' as BatchStatus,
+    warehouseLocation: record.warehouseLocation,
+    zone: record.zone,
+    aisle: record.aisle,
+    levelCode: record.levelCode,
+    bin: record.bin,
+    notes: `Auto-created from GRN ${record.grnNo}`
+  });
+
+  record.linkedBatchId = batch.id;
+  return batch;
+}
+
 export async function createGRN(input: CreateGRNInput) {
   const record: GRNRecord = {
     id: 'grn-' + Date.now(),
@@ -651,34 +683,7 @@ export async function createGRN(input: CreateGRNInput) {
   };
 
   if (record.status === 'posted') {
-    const batch = await createBatch({
-      inventoryItemId: record.inventoryItemId,
-      batchNumber: record.batchNumber,
-      lotNumber: record.lotNumber,
-      supplierLotNumber: record.supplierLotNumber,
-      manufactureDate: record.manufactureDate,
-      expiryDate: record.expiryDate,
-      receivedDate: record.receivedDate,
-      supplierName: record.supplierName,
-      purchaseOrderNo: record.poNo,
-      goodsReceivedNoteNo: record.grnNo,
-      unitCost: 0,
-      currency: 'USD',
-      receivedQty: record.receivedQty,
-      availableQty: record.receivedQty,
-      reservedQty: 0,
-      blockedQty: 0,
-      qaHoldQty: 0,
-      batchStatus: 'available' as BatchStatus,
-      warehouseLocation: record.warehouseLocation,
-      zone: record.zone,
-      aisle: record.aisle,
-      levelCode: record.levelCode,
-      bin: record.bin,
-      notes: `Auto-created from GRN ${record.grnNo}`
-    });
-
-    record.linkedBatchId = batch.id;
+    await createLinkedBatchForGRNRecord(record);
     applyReceiptToPurchaseOrder(record.poNo, record.purchaseOrderLineId, record.receivedQty);
   }
 
@@ -689,4 +694,48 @@ export async function createGRN(input: CreateGRNInput) {
 
   grnStore = [record, ...grnStore];
   return record;
+}
+
+export async function postGRN(id: string) {
+  const index = grnStore.findIndex((row) => row.id === id);
+
+  if (index === -1) {
+    return null;
+  }
+
+  const current = grnStore[index];
+
+  if (current.status === 'posted') {
+    const alreadyPosted: GRNRecord = {
+      ...current,
+      purchaseOrderLineContext: getPurchaseOrderLineContext(
+        current.poNo,
+        current.purchaseOrderLineId
+      )
+    };
+
+    grnStore[index] = alreadyPosted;
+    return alreadyPosted;
+  }
+
+  const updated: GRNRecord = {
+    ...current,
+    status: 'posted',
+    postedAt: new Date().toISOString(),
+    purchaseOrderLineContext: null
+  };
+
+  if (!updated.linkedBatchId) {
+    await createLinkedBatchForGRNRecord(updated);
+  }
+
+  applyReceiptToPurchaseOrder(updated.poNo, updated.purchaseOrderLineId, updated.receivedQty);
+
+  updated.purchaseOrderLineContext = getPurchaseOrderLineContext(
+    updated.poNo,
+    updated.purchaseOrderLineId
+  );
+
+  grnStore[index] = updated;
+  return updated;
 }
