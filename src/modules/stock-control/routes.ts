@@ -14,6 +14,7 @@ import {
   getInventoryStockMovements,
   getStockMovements
 } from './movement-service';
+import { commitIssueAllocation, previewIssueAllocation } from '../batches/repository';
 
 export const stockControlRouter = Router();
 
@@ -104,5 +105,73 @@ stockControlRouter.get(
     const batchId = readSingle(request.params.batchId as string | string[] | undefined);
     const items = await getBatchStockMovements(batchId);
     return ok(response, items, 200);
+  })
+);
+
+stockControlRouter.get(
+  '/issue-preview',
+  asyncHandler(async (request, response) => {
+    const inventoryItemId = readSingle(request.query.inventoryItemId as string | string[] | undefined);
+    const requestedQty = Number(readSingle(request.query.requestedQty as string | string[] | undefined));
+
+    if (!inventoryItemId) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'inventoryItemId is required'
+      });
+    }
+
+    if (Number.isNaN(requestedQty) || requestedQty <= 0) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'requestedQty must be greater than 0'
+      });
+    }
+
+    const result = await previewIssueAllocation(inventoryItemId, requestedQty);
+    return ok(response, result, 200);
+  })
+);
+
+stockControlRouter.post(
+  '/issues',
+  asyncHandler(async (request, response) => {
+    const inventoryItemId = String(request.body?.inventoryItemId ?? '').trim();
+    const requestedQty = Number(request.body?.requestedQty);
+    const reason = String(request.body?.reason ?? '').trim();
+
+    if (!inventoryItemId) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'inventoryItemId is required'
+      });
+    }
+
+    if (Number.isNaN(requestedQty) || requestedQty <= 0) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'requestedQty must be greater than 0'
+      });
+    }
+
+    const result = await commitIssueAllocation({
+      inventoryItemId,
+      requestedQty,
+      reason
+    });
+
+    if (!result) {
+      throw new AppError({
+        status: 400,
+        code: 'NO_AVAILABLE_BATCH_STOCK',
+        message: 'No available batch stock found for issue allocation'
+      });
+    }
+
+    return created(response, result);
   })
 );

@@ -45,6 +45,35 @@ export interface BatchStatusHistoryRecord {
   changedAt: string;
 }
 
+export interface StockIssueAllocationRecord {
+  batchId: string;
+  batchNumber: string;
+  inventoryItemId: string;
+  availableQtyBefore: number;
+  issuedQty: number;
+  availableQtyAfter: number;
+  expiryDate: string | null;
+  receivedDate: string | null;
+  warehouseLocation: string;
+  zone: string;
+  aisle: string;
+  levelCode: string;
+  bin: string;
+  unitCost: number;
+  currency: string;
+}
+
+export interface StockIssueRecord {
+  id: string;
+  issueNo: string;
+  inventoryItemId: string;
+  requestedQty: number;
+  issuedQty: number;
+  reason: string;
+  issueDate: string;
+  allocations: StockIssueAllocationRecord[];
+}
+
 export interface CreateBatchInput {
   inventoryItemId: string;
   batchNumber: string;
@@ -154,6 +183,8 @@ let batchStatusHistoryStore: BatchStatusHistoryRecord[] = [
   }
 ];
 
+let stockIssueStore: StockIssueRecord[] = [];
+
 function matchesSearch(values: string[], search?: string) {
   const normalized = String(search ?? '').trim().toLowerCase();
 
@@ -162,6 +193,30 @@ function matchesSearch(values: string[], search?: string) {
   }
 
   return values.some((value) => value.toLowerCase().includes(normalized));
+}
+
+function nextIssueNumber() {
+  return `ISS-${new Date().getFullYear()}-${String(stockIssueStore.length + 1).padStart(3, '0')}`;
+}
+
+function sortBatchesForFefo(items: BatchRecord[]) {
+  return [...items].sort((a, b) => {
+    const aExpiry = a.expiryDate ? new Date(a.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;
+    const bExpiry = b.expiryDate ? new Date(b.expiryDate).getTime() : Number.MAX_SAFE_INTEGER;
+
+    if (aExpiry !== bExpiry) {
+      return aExpiry - bExpiry;
+    }
+
+    const aReceived = a.receivedDate ? new Date(a.receivedDate).getTime() : Number.MAX_SAFE_INTEGER;
+    const bReceived = b.receivedDate ? new Date(b.receivedDate).getTime() : Number.MAX_SAFE_INTEGER;
+
+    if (aReceived !== bReceived) {
+      return aReceived - bReceived;
+    }
+
+    return a.batchNumber.localeCompare(b.batchNumber);
+  });
 }
 
 export function __setBatchStore(items: BatchRecord[]) {
@@ -210,6 +265,10 @@ export function listBatchStatusHistory(batchId: string) {
   return [...batchStatusHistoryStore]
     .filter((item) => item.batchId === batchId)
     .sort((a, b) => new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime());
+}
+
+export function listStockIssueEvents() {
+  return [...stockIssueStore].sort((a, b) => new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime());
 }
 
 export async function createBatch(input: CreateBatchInput) {
@@ -302,4 +361,103 @@ export async function updateBatchStatus(
   ];
 
   return updated;
+}
+
+export async function previewIssueAllocation(inventoryItemId: string, requestedQty: number) {
+  const candidates = sortBatchesForFefo(
+    batchStore.filter(
+      (item) =>
+        item.inventoryItemId === inventoryItemId &&
+        item.batchStatus === 'available' &&
+        item.availableQty > 0
+    )
+  );
+
+  let remaining = requestedQty;
+
+  const allocations = candidates
+    .filter(() => remaining > 0)
+    .map((batch) => {
+      const issueQty = Math.min(batch.availableQty, remaining);
+      remaining -= issueQty;
+
+      return {
+        batchId: batch.id,
+        batchNumber: batch.batchNumber,
+        inventoryItemId: batch.inventoryItemId,
+        availableQtyBefore: batch.availableQty,
+        issuedQty: issueQty,
+        availableQtyAfter: batch.availableQty - issueQty,
+        expiryDate: batch.expiryDate,
+        receivedDate: batch.receivedDate,
+        warehouseLocation: batch.warehouseLocation,
+        zone: batch.zone,
+        aisle: batch.aisle,
+        levelCode: batch.levelCode,
+        bin: batch.bin,
+        unitCost: batch.unitCost,
+        currency: batch.currency
+      };
+    })
+    .filter((row) => row.issuedQty > 0);
+
+  return {
+    requestedQty,
+    totalAvailableQty: candidates.reduce((sum, item) => sum + item.availableQty, 0),
+    allocatedQty: allocations.reduce((sum, item) => sum + item.issuedQty, 0),
+    remainingUnallocatedQty: remaining > 0 ? remaining : 0,
+    allocations
+  };
+}
+
+export async function commitIssueAllocation(input: {
+  inventoryItemId: string;
+  requestedQty: number;
+  reason: string;
+}) {
+  const preview = await previewIssueAllocation(input.inventoryItemId, input.requestedQty);
+
+  if (preview.allocatedQty <= 0) {
+    return null;
+  }
+
+  const updatedBatches = batchStore.map((batch) => {
+    const allocation = preview.allocations.find((item) => item.batchId === batch.id);
+
+    if (!allocation) {
+      return batch;
+    }
+
+    const nextAvailableQty = allocation.availableQtyAfter;
+
+    return {
+      ...batch,
+      availableQty: nextAvailableQty,
+      batchStatus:
+        nextAvailableQty <= 0 && batch.reservedQty <= 0 && batch.blockedQty <= 0 && batch.qaHoldQty <= 0
+          ? 'consumed'
+          : batch.batchStatus,
+      updatedAt: new Date().toISOString()
+    };
+  });
+
+  batchStore = updatedBatches;
+
+  const issueRecord: StockIssueRecord = {
+    id: 'iss-' + Date.now(),
+    issueNo: nextIssueNumber(),
+    inventoryItemId: input.inventoryItemId,
+    requestedQty: input.requestedQty,
+    issuedQty: preview.allocatedQty,
+    reason: input.reason,
+    issueDate: new Date().toISOString(),
+    allocations: preview.allocations
+  };
+
+  stockIssueStore = [issueRecord, ...stockIssueStore];
+
+  return {
+    issue: issueRecord,
+    preview
+  };
 }
