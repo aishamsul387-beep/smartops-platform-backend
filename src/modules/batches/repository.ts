@@ -1,7 +1,9 @@
-import { env } from '../../config/env';
-import { execute, isPostgresEnabled, queryRows } from '../../infrastructure/db/postgres';
-
-export type BatchStatus = 'available' | 'blocked' | 'quarantine' | 'expired' | 'consumed';
+export type BatchStatus =
+  | 'available'
+  | 'blocked'
+  | 'quarantine'
+  | 'expired'
+  | 'consumed';
 
 export interface BatchRecord {
   id: string;
@@ -59,9 +61,7 @@ export interface CreateBatchInput {
   notes: string;
 }
 
-let initialized = false;
-
-let memoryBatchStore: BatchRecord[] = [
+let batchStore: BatchRecord[] = [
   {
     id: 'bat-001',
     inventoryItemId: 'inv-001',
@@ -74,7 +74,7 @@ let memoryBatchStore: BatchRecord[] = [
     supplierName: 'Prime Steel Supply',
     purchaseOrderNo: 'PO-2026-001',
     goodsReceivedNoteNo: 'GRN-2026-001',
-    unitCost: 15.5,
+    unitCost: 52.08,
     currency: 'USD',
     receivedQty: 240,
     availableQty: 220,
@@ -87,8 +87,8 @@ let memoryBatchStore: BatchRecord[] = [
     aisle: '01',
     levelCode: '01',
     bin: '01',
-    notes: 'Primary steel receiving batch',
-    updatedAt: '2026-05-22T09:00:00.000Z'
+    notes: 'Seeded batch record',
+    updatedAt: '2026-05-21T14:30:00.000Z'
   },
   {
     id: 'bat-002',
@@ -102,7 +102,7 @@ let memoryBatchStore: BatchRecord[] = [
     supplierName: 'ValveCore Manufacturing',
     purchaseOrderNo: 'PO-2026-003',
     goodsReceivedNoteNo: 'GRN-2026-002',
-    unitCost: 110,
+    unitCost: 110.71,
     currency: 'USD',
     receivedQty: 30,
     availableQty: 0,
@@ -115,8 +115,8 @@ let memoryBatchStore: BatchRecord[] = [
     aisle: '03',
     levelCode: '02',
     bin: '02',
-    notes: 'Awaiting QA release',
-    updatedAt: '2026-05-22T09:10:00.000Z'
+    notes: 'Seeded batch record',
+    updatedAt: '2026-05-21T15:10:00.000Z'
   }
 ];
 
@@ -130,130 +130,12 @@ function matchesSearch(values: string[], search?: string) {
   return values.some((value) => value.toLowerCase().includes(normalized));
 }
 
-function mapRow(row: any): BatchRecord {
-  return {
-    id: String(row.id),
-    inventoryItemId: String(row.inventory_item_id),
-    batchNumber: String(row.batch_number),
-    lotNumber: String(row.lot_number ?? ''),
-    supplierLotNumber: String(row.supplier_lot_number ?? ''),
-    manufactureDate: row.manufacture_date ? String(row.manufacture_date) : null,
-    expiryDate: row.expiry_date ? String(row.expiry_date) : null,
-    receivedDate: row.received_date ? String(row.received_date) : null,
-    supplierName: String(row.supplier_name ?? ''),
-    purchaseOrderNo: String(row.purchase_order_no ?? ''),
-    goodsReceivedNoteNo: String(row.goods_received_note_no ?? ''),
-    unitCost: Number(row.unit_cost ?? 0),
-    currency: String(row.currency ?? ''),
-    receivedQty: Number(row.received_qty ?? 0),
-    availableQty: Number(row.available_qty ?? 0),
-    reservedQty: Number(row.reserved_qty ?? 0),
-    blockedQty: Number(row.blocked_qty ?? 0),
-    qaHoldQty: Number(row.qa_hold_qty ?? 0),
-    batchStatus: row.batch_status as BatchStatus,
-    warehouseLocation: String(row.warehouse_location ?? ''),
-    zone: String(row.zone ?? ''),
-    aisle: String(row.aisle ?? ''),
-    levelCode: String(row.level_code ?? ''),
-    bin: String(row.bin ?? ''),
-    notes: String(row.notes ?? ''),
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
+export function __setBatchStore(items: BatchRecord[]) {
+  batchStore = items;
 }
 
-export async function ensureBatchTable() {
-  if (!isPostgresEnabled() || initialized) {
-    return;
-  }
-
-  await execute(`
-    CREATE TABLE IF NOT EXISTS inventory_batches (
-      id TEXT PRIMARY KEY,
-      inventory_item_id TEXT NOT NULL,
-      batch_number TEXT NOT NULL,
-      lot_number TEXT NOT NULL DEFAULT '',
-      supplier_lot_number TEXT NOT NULL DEFAULT '',
-      manufacture_date DATE NULL,
-      expiry_date DATE NULL,
-      received_date DATE NULL,
-      supplier_name TEXT NOT NULL DEFAULT '',
-      purchase_order_no TEXT NOT NULL DEFAULT '',
-      goods_received_note_no TEXT NOT NULL DEFAULT '',
-      unit_cost NUMERIC NOT NULL DEFAULT 0,
-      currency TEXT NOT NULL DEFAULT '',
-      received_qty NUMERIC NOT NULL DEFAULT 0,
-      available_qty NUMERIC NOT NULL DEFAULT 0,
-      reserved_qty NUMERIC NOT NULL DEFAULT 0,
-      blocked_qty NUMERIC NOT NULL DEFAULT 0,
-      qa_hold_qty NUMERIC NOT NULL DEFAULT 0,
-      batch_status TEXT NOT NULL,
-      warehouse_location TEXT NOT NULL DEFAULT '',
-      zone TEXT NOT NULL DEFAULT '',
-      aisle TEXT NOT NULL DEFAULT '',
-      level_code TEXT NOT NULL DEFAULT '',
-      bin TEXT NOT NULL DEFAULT '',
-      notes TEXT NOT NULL DEFAULT '',
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  const rows = await queryRows<{ total: string }>(
-    'SELECT COUNT(*)::text AS total FROM inventory_batches'
-  );
-
-  const total = Number(rows[0]?.total ?? '0');
-
-  if (total === 0) {
-    for (const item of memoryBatchStore) {
-      await execute(
-        `
-        INSERT INTO inventory_batches (
-          id, inventory_item_id, batch_number, lot_number, supplier_lot_number,
-          manufacture_date, expiry_date, received_date, supplier_name, purchase_order_no,
-          goods_received_note_no, unit_cost, currency, received_qty, available_qty,
-          reserved_qty, blocked_qty, qa_hold_qty, batch_status, warehouse_location,
-          zone, aisle, level_code, bin, notes, updated_at
-        ) VALUES (
-          $1,$2,$3,$4,$5,
-          $6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,
-          $16,$17,$18,$19,$20,
-          $21,$22,$23,$24,$25,$26
-        )
-        `,
-        [
-          item.id,
-          item.inventoryItemId,
-          item.batchNumber,
-          item.lotNumber,
-          item.supplierLotNumber,
-          item.manufactureDate,
-          item.expiryDate,
-          item.receivedDate,
-          item.supplierName,
-          item.purchaseOrderNo,
-          item.goodsReceivedNoteNo,
-          item.unitCost,
-          item.currency,
-          item.receivedQty,
-          item.availableQty,
-          item.reservedQty,
-          item.blockedQty,
-          item.qaHoldQty,
-          item.batchStatus,
-          item.warehouseLocation,
-          item.zone,
-          item.aisle,
-          item.levelCode,
-          item.bin,
-          item.notes,
-          item.updatedAt
-        ]
-      );
-    }
-  }
-
-  initialized = true;
+export function getBatchPersistenceMode() {
+  return 'memory';
 }
 
 export async function listBatches(filters?: {
@@ -261,152 +143,33 @@ export async function listBatches(filters?: {
   status?: string;
   search?: string;
 }) {
-  if (!isPostgresEnabled()) {
-    return memoryBatchStore.filter((item) => {
-      const okItem =
-        !filters?.inventoryItemId || item.inventoryItemId === filters.inventoryItemId;
+  return batchStore.filter((item) => {
+    const inventoryItemId = String(filters?.inventoryItemId ?? '').trim();
+    const status = String(filters?.status ?? '').trim();
 
-      const status = String(filters?.status ?? '').trim();
-      const okStatus = !status || status === 'all' || item.batchStatus === status;
+    const okInventory = !inventoryItemId || item.inventoryItemId === inventoryItemId;
+    const okStatus = !status || status === 'all' || item.batchStatus === status;
 
-      const okSearch = matchesSearch(
-        [
-          item.batchNumber,
-          item.lotNumber,
-          item.supplierLotNumber,
-          item.supplierName,
-          item.purchaseOrderNo,
-          item.goodsReceivedNoteNo
-        ],
-        filters?.search
-      );
+    const okSearch = matchesSearch(
+      [
+        item.batchNumber,
+        item.lotNumber,
+        item.supplierLotNumber,
+        item.supplierName,
+        item.purchaseOrderNo,
+        item.goodsReceivedNoteNo,
+        item.batchStatus,
+        item.inventoryItemId
+      ],
+      filters?.search
+    );
 
-      return okItem && okStatus && okSearch;
-    });
-  }
-
-  await ensureBatchTable();
-
-  const inventoryItemId = String(filters?.inventoryItemId ?? '').trim();
-  const status = String(filters?.status ?? '').trim();
-  const search = String(filters?.search ?? '').trim().toLowerCase();
-
-  let query = `
-    SELECT
-      id,
-      inventory_item_id,
-      batch_number,
-      lot_number,
-      supplier_lot_number,
-      manufacture_date,
-      expiry_date,
-      received_date,
-      supplier_name,
-      purchase_order_no,
-      goods_received_note_no,
-      unit_cost,
-      currency,
-      received_qty,
-      available_qty,
-      reserved_qty,
-      blocked_qty,
-      qa_hold_qty,
-      batch_status,
-      warehouse_location,
-      zone,
-      aisle,
-      level_code,
-      bin,
-      notes,
-      updated_at
-    FROM inventory_batches
-    WHERE 1=1
-  `;
-
-  const params: unknown[] = [];
-  let index = 1;
-
-  if (inventoryItemId) {
-    query += ` AND inventory_item_id = $${index}`;
-    params.push(inventoryItemId);
-    index += 1;
-  }
-
-  if (status && status !== 'all') {
-    query += ` AND batch_status = $${index}`;
-    params.push(status);
-    index += 1;
-  }
-
-  if (search) {
-    query += `
-      AND (
-        LOWER(batch_number) LIKE $${index}
-        OR LOWER(lot_number) LIKE $${index}
-        OR LOWER(supplier_lot_number) LIKE $${index}
-        OR LOWER(supplier_name) LIKE $${index}
-        OR LOWER(purchase_order_no) LIKE $${index}
-        OR LOWER(goods_received_note_no) LIKE $${index}
-      )
-    `;
-    params.push(`%${search}%`);
-    index += 1;
-  }
-
-  query += ' ORDER BY updated_at DESC';
-
-  const rows = await queryRows(query, params);
-  return rows.map(mapRow);
+    return okInventory && okStatus && okSearch;
+  });
 }
 
 export async function getBatchById(id: string) {
-  if (!isPostgresEnabled()) {
-    return memoryBatchStore.find((item) => item.id === id) ?? null;
-  }
-
-  await ensureBatchTable();
-
-  const rows = await queryRows(
-    `
-    SELECT
-      id,
-      inventory_item_id,
-      batch_number,
-      lot_number,
-      supplier_lot_number,
-      manufacture_date,
-      expiry_date,
-      received_date,
-      supplier_name,
-      purchase_order_no,
-      goods_received_note_no,
-      unit_cost,
-      currency,
-      received_qty,
-      available_qty,
-      reserved_qty,
-      blocked_qty,
-      qa_hold_qty,
-      batch_status,
-      warehouse_location,
-      zone,
-      aisle,
-      level_code,
-      bin,
-      notes,
-      updated_at
-    FROM inventory_batches
-    WHERE id = $1
-    LIMIT 1
-    `,
-    [id]
-  );
-
-  if (rows.length === 0) {
-    return null;
-  }
-
-  return mapRow(rows[0]);
+  return batchStore.find((item) => item.id === id) ?? null;
 }
 
 export async function createBatch(input: CreateBatchInput) {
@@ -439,62 +202,34 @@ export async function createBatch(input: CreateBatchInput) {
     updatedAt: new Date().toISOString()
   };
 
-  if (!isPostgresEnabled()) {
-    memoryBatchStore = [record, ...memoryBatchStore];
-    return record;
-  }
-
-  await ensureBatchTable();
-
-  await execute(
-    `
-    INSERT INTO inventory_batches (
-      id, inventory_item_id, batch_number, lot_number, supplier_lot_number,
-      manufacture_date, expiry_date, received_date, supplier_name, purchase_order_no,
-      goods_received_note_no, unit_cost, currency, received_qty, available_qty,
-      reserved_qty, blocked_qty, qa_hold_qty, batch_status, warehouse_location,
-      zone, aisle, level_code, bin, notes, updated_at
-    ) VALUES (
-      $1,$2,$3,$4,$5,
-      $6,$7,$8,$9,$10,
-      $11,$12,$13,$14,$15,
-      $16,$17,$18,$19,$20,
-      $21,$22,$23,$24,$25,$26
-    )
-    `,
-    [
-      record.id,
-      record.inventoryItemId,
-      record.batchNumber,
-      record.lotNumber,
-      record.supplierLotNumber,
-      record.manufactureDate,
-      record.expiryDate,
-      record.receivedDate,
-      record.supplierName,
-      record.purchaseOrderNo,
-      record.goodsReceivedNoteNo,
-      record.unitCost,
-      record.currency,
-      record.receivedQty,
-      record.availableQty,
-      record.reservedQty,
-      record.blockedQty,
-      record.qaHoldQty,
-      record.batchStatus,
-      record.warehouseLocation,
-      record.zone,
-      record.aisle,
-      record.levelCode,
-      record.bin,
-      record.notes,
-      record.updatedAt
-    ]
-  );
-
+  batchStore = [record, ...batchStore];
   return record;
 }
 
-export function getBatchPersistenceMode() {
-  return env.databaseUrl ? 'postgres' : 'memory';
+export async function updateBatchStatus(
+  id: string,
+  nextStatus: BatchStatus,
+  notes?: string
+) {
+  const index = batchStore.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return null;
+  }
+
+  const current = batchStore[index];
+
+  const mergedNotes = [current.notes, notes]
+    .filter((value) => String(value ?? '').trim())
+    .join(' | ');
+
+  const updated: BatchRecord = {
+    ...current,
+    batchStatus: nextStatus,
+    notes: mergedNotes,
+    updatedAt: new Date().toISOString()
+  };
+
+  batchStore[index] = updated;
+  return updated;
 }
