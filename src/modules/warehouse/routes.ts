@@ -4,7 +4,9 @@ import { asyncHandler } from '../../common/utils/async-handler';
 import { AppError } from '../../common/errors/app-error';
 import {
   createWarehouseLocation,
+  exportWarehouseLocationsCsv,
   getWarehouseLocationById,
+  importWarehouseLocationsCsv,
   listWarehouseLocations,
   toggleWarehouseLocationActive,
   updateWarehouseLocation,
@@ -125,6 +127,34 @@ warehouseRouter.get(
       },
       200
     );
+  })
+);
+
+warehouseRouter.get(
+  '/locations/export-csv',
+  asyncHandler(async (_request, response) => {
+    const csvText = exportWarehouseLocationsCsv();
+    response.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    response.setHeader('Content-Disposition', 'attachment; filename="warehouse-locations.csv"');
+    response.status(200).send(csvText);
+  })
+);
+
+warehouseRouter.post(
+  '/locations/import-csv',
+  asyncHandler(async (request, response) => {
+    const csvText = String(request.body?.csvText ?? '');
+
+    if (!csvText.trim()) {
+      throw new AppError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'csvText is required'
+      });
+    }
+
+    const result = importWarehouseLocationsCsv(csvText);
+    return ok(response, result, 200);
   })
 );
 
