@@ -9,15 +9,12 @@ import {
   getOrdersSummary,
   getPurchaseOrderById,
   getPurchaseOrderByNumber,
-  getQuotationById,
   issuePurchaseOrder,
   listGRNs,
   listPurchaseOrders,
   listQuotations,
-  updateQuotationStatus,
   type GRNStatus,
-  type PurchaseOrderStatus,
-  type QuotationStatus
+  type PurchaseOrderStatus
 } from './store';
 
 export const ordersRouter = Router();
@@ -35,13 +32,6 @@ const purchaseOrderStatuses: PurchaseOrderStatus[] = [
   'issued',
   'partially_received',
   'received'
-];
-
-const quotationStatuses: QuotationStatus[] = [
-  'draft',
-  'sent',
-  'approved',
-  'rejected'
 ];
 
 const grnStatuses: GRNStatus[] = ['draft', 'posted'];
@@ -62,53 +52,6 @@ ordersRouter.get(
     });
 
     return ok(response, items, 200);
-  })
-);
-
-ordersRouter.get(
-  '/quotations/:id',
-  asyncHandler(async (request, response) => {
-    const id = readSingle(request.params.id as string | string[] | undefined);
-    const item = getQuotationById(id);
-
-    if (!item) {
-      throw new AppError({
-        status: 404,
-        code: 'QUOTATION_NOT_FOUND',
-        message: 'Quotation not found'
-      });
-    }
-
-    return ok(response, item, 200);
-  })
-);
-
-ordersRouter.patch(
-  '/quotations/:id/status',
-  asyncHandler(async (request, response) => {
-    const id = readSingle(request.params.id as string | string[] | undefined);
-    const status = String(request.body?.status ?? '').trim() as QuotationStatus;
-    const approvalNotes = String(request.body?.approvalNotes ?? '').trim();
-
-    if (!quotationStatuses.includes(status)) {
-      throw new AppError({
-        status: 400,
-        code: 'VALIDATION_ERROR',
-        message: 'status must be one of: draft, sent, approved, rejected'
-      });
-    }
-
-    const item = updateQuotationStatus(id, status, approvalNotes);
-
-    if (!item) {
-      throw new AppError({
-        status: 404,
-        code: 'QUOTATION_NOT_FOUND',
-        message: 'Quotation not found'
-      });
-    }
-
-    return ok(response, item, 200);
   })
 );
 
