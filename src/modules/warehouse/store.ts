@@ -1,75 +1,105 @@
-export type WarehouseLocationStatus = 'available' | 'limited' | 'full';
+export type WarehouseLocationStatus = 'empty' | 'occupied' | 'blocked';
+export type WarehouseLocationType = 'rack' | 'floor' | 'bulk' | 'staging' | 'quarantine';
 
 export interface WarehouseLocationRecord {
   id: string;
-  code: string;
+  warehouseCode: string;
+  warehouseName: string;
+  locationCode: string;
   zone: string;
   aisle: string;
+  levelCode: string;
   bin: string;
-  capacity: number;
-  occupied: number;
-  itemCount: number;
+  locationType: WarehouseLocationType;
   status: WarehouseLocationStatus;
+  palletCapacity: number;
+  usedPalletCapacity: number;
+  cubicCapacityM3: number;
+  usedCubicCapacityM3: number;
+  isActive: boolean;
+  notes: string;
   updatedAt: string;
 }
 
-export interface WarehouseSummaryRecord {
-  totalLocations: number;
-  activeLocations: number;
-  fullLocations: number;
-  totalCapacity: number;
-  totalOccupied: number;
-  utilizationPercent: number;
+export interface CreateWarehouseLocationInput {
+  warehouseCode: string;
+  warehouseName: string;
+  locationCode: string;
+  zone: string;
+  aisle: string;
+  levelCode: string;
+  bin: string;
+  locationType: WarehouseLocationType;
+  status: WarehouseLocationStatus;
+  palletCapacity: number;
+  usedPalletCapacity: number;
+  cubicCapacityM3: number;
+  usedCubicCapacityM3: number;
+  isActive: boolean;
+  notes: string;
 }
 
-let warehouseLocations: WarehouseLocationRecord[] = [
+export interface UpdateWarehouseLocationInput extends CreateWarehouseLocationInput {
+  id: string;
+}
+
+let warehouseLocationStore: WarehouseLocationRecord[] = [
   {
-    id: 'wh-001',
-    code: 'A-01-01',
+    id: 'loc-001',
+    warehouseCode: 'WH-001',
+    warehouseName: 'Main Warehouse',
+    locationCode: 'A-01-01-01',
     zone: 'A',
     aisle: '01',
+    levelCode: '01',
     bin: '01',
-    capacity: 300,
-    occupied: 240,
-    itemCount: 12,
-    status: 'available',
-    updatedAt: '2026-05-21T08:30:00.000Z'
+    locationType: 'rack',
+    status: 'occupied',
+    palletCapacity: 4,
+    usedPalletCapacity: 2,
+    cubicCapacityM3: 12,
+    usedCubicCapacityM3: 6,
+    isActive: true,
+    notes: 'Primary raw material rack',
+    updatedAt: '2026-05-28T08:00:00.000Z'
   },
   {
-    id: 'wh-002',
-    code: 'B-02-04',
+    id: 'loc-002',
+    warehouseCode: 'WH-001',
+    warehouseName: 'Main Warehouse',
+    locationCode: 'B-02-04-02',
     zone: 'B',
     aisle: '02',
-    bin: '04',
-    capacity: 120,
-    occupied: 95,
-    itemCount: 7,
-    status: 'limited',
-    updatedAt: '2026-05-21T09:00:00.000Z'
-  },
-  {
-    id: 'wh-003',
-    code: 'C-03-02',
-    zone: 'C',
-    aisle: '03',
+    levelCode: '04',
     bin: '02',
-    capacity: 80,
-    occupied: 80,
-    itemCount: 3,
-    status: 'full',
-    updatedAt: '2026-05-21T09:40:00.000Z'
+    locationType: 'rack',
+    status: 'empty',
+    palletCapacity: 6,
+    usedPalletCapacity: 0,
+    cubicCapacityM3: 18,
+    usedCubicCapacityM3: 0,
+    isActive: true,
+    notes: 'Packaging reserve location',
+    updatedAt: '2026-05-28T08:10:00.000Z'
   },
   {
-    id: 'wh-004',
-    code: 'D-01-05',
-    zone: 'D',
+    id: 'loc-003',
+    warehouseCode: 'WH-001',
+    warehouseName: 'Main Warehouse',
+    locationCode: 'Q-01-01-01',
+    zone: 'Q',
     aisle: '01',
-    bin: '05',
-    capacity: 200,
-    occupied: 60,
-    itemCount: 5,
-    status: 'available',
-    updatedAt: '2026-05-21T10:10:00.000Z'
+    levelCode: '01',
+    bin: '01',
+    locationType: 'quarantine',
+    status: 'blocked',
+    palletCapacity: 2,
+    usedPalletCapacity: 1,
+    cubicCapacityM3: 5,
+    usedCubicCapacityM3: 2,
+    isActive: true,
+    notes: 'Quarantine location',
+    updatedAt: '2026-05-28T08:20:00.000Z'
   }
 ];
 
@@ -83,33 +113,113 @@ function matchesSearch(values: string[], search?: string) {
   return values.some((value) => value.toLowerCase().includes(normalized));
 }
 
-export function listWarehouseLocations(filters?: { search?: string; status?: string }) {
-  return warehouseLocations.filter((item) => {
+export function listWarehouseLocations(filters?: {
+  search?: string;
+  status?: string;
+  type?: string;
+  active?: string;
+}) {
+  return warehouseLocationStore.filter((item) => {
     const okSearch = matchesSearch(
-      [item.code, item.zone, item.aisle, item.bin],
+      [
+        item.warehouseCode,
+        item.warehouseName,
+        item.locationCode,
+        item.zone,
+        item.aisle,
+        item.levelCode,
+        item.bin,
+        item.locationType,
+        item.status
+      ],
       filters?.search
     );
 
     const status = String(filters?.status ?? '').trim();
     const okStatus = !status || status === 'all' || item.status === status;
 
-    return okSearch && okStatus;
+    const type = String(filters?.type ?? '').trim();
+    const okType = !type || type === 'all' || item.locationType === type;
+
+    const active = String(filters?.active ?? '').trim();
+    const okActive =
+      !active ||
+      active === 'all' ||
+      (active === 'active' && item.isActive) ||
+      (active === 'inactive' && !item.isActive);
+
+    return okSearch && okStatus && okType && okActive;
   });
 }
 
-export function getWarehouseSummary(): WarehouseSummaryRecord {
-  const totalLocations = warehouseLocations.length;
-  const activeLocations = warehouseLocations.filter((item) => item.occupied > 0).length;
-  const fullLocations = warehouseLocations.filter((item) => item.status === 'full').length;
-  const totalCapacity = warehouseLocations.reduce((sum, item) => sum + item.capacity, 0);
-  const totalOccupied = warehouseLocations.reduce((sum, item) => sum + item.occupied, 0);
+export function getWarehouseLocationById(id: string) {
+  return warehouseLocationStore.find((item) => item.id === id) ?? null;
+}
 
-  return {
-    totalLocations,
-    activeLocations,
-    fullLocations,
-    totalCapacity,
-    totalOccupied,
-    utilizationPercent: totalCapacity > 0 ? Math.round((totalOccupied / totalCapacity) * 100) : 0
+export function createWarehouseLocation(input: CreateWarehouseLocationInput) {
+  const record: WarehouseLocationRecord = {
+    id: 'loc-' + Date.now(),
+    warehouseCode: input.warehouseCode,
+    warehouseName: input.warehouseName,
+    locationCode: input.locationCode,
+    zone: input.zone,
+    aisle: input.aisle,
+    levelCode: input.levelCode,
+    bin: input.bin,
+    locationType: input.locationType,
+    status: input.status,
+    palletCapacity: input.palletCapacity,
+    usedPalletCapacity: input.usedPalletCapacity,
+    cubicCapacityM3: input.cubicCapacityM3,
+    usedCubicCapacityM3: input.usedCubicCapacityM3,
+    isActive: input.isActive,
+    notes: input.notes,
+    updatedAt: new Date().toISOString()
   };
+
+  warehouseLocationStore = [record, ...warehouseLocationStore];
+  return record;
+}
+
+export function updateWarehouseLocation(input: UpdateWarehouseLocationInput) {
+  const index = warehouseLocationStore.findIndex((item) => item.id === input.id);
+
+  if (index === -1) {
+    return null;
+  }
+
+  const updated: WarehouseLocationRecord = {
+    id: input.id,
+    warehouseCode: input.warehouseCode,
+    warehouseName: input.warehouseName,
+    locationCode: input.locationCode,
+    zone: input.zone,
+    aisle: input.aisle,
+    levelCode: input.levelCode,
+    bin: input.bin,
+    locationType: input.locationType,
+    status: input.status,
+    palletCapacity: input.palletCapacity,
+    usedPalletCapacity: input.usedPalletCapacity,
+    cubicCapacityM3: input.cubicCapacityM3,
+    usedCubicCapacityM3: input.usedCubicCapacityM3,
+    isActive: input.isActive,
+    notes: input.notes,
+    updatedAt: new Date().toISOString()
+  };
+
+  warehouseLocationStore[index] = updated;
+  return updated;
+}
+
+export function toggleWarehouseLocationActive(id: string, isActive: boolean) {
+  const item = warehouseLocationStore.find((row) => row.id === id);
+
+  if (!item) {
+    return null;
+  }
+
+  item.isActive = isActive;
+  item.updatedAt = new Date().toISOString();
+  return item;
 }
