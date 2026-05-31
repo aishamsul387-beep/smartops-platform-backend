@@ -34,6 +34,17 @@ export interface BatchRecord {
   updatedAt: string;
 }
 
+export interface BatchStatusHistoryRecord {
+  id: string;
+  batchId: string;
+  inventoryItemId: string;
+  batchNumber: string;
+  previousStatus: BatchStatus;
+  nextStatus: BatchStatus;
+  notes: string;
+  changedAt: string;
+}
+
 export interface CreateBatchInput {
   inventoryItemId: string;
   batchNumber: string;
@@ -120,6 +131,29 @@ let batchStore: BatchRecord[] = [
   }
 ];
 
+let batchStatusHistoryStore: BatchStatusHistoryRecord[] = [
+  {
+    id: 'bsh-001',
+    batchId: 'bat-001',
+    inventoryItemId: 'inv-001',
+    batchNumber: 'BATCH-STEEL-001',
+    previousStatus: 'available',
+    nextStatus: 'available',
+    notes: 'Seeded initial status',
+    changedAt: '2026-05-21T14:30:00.000Z'
+  },
+  {
+    id: 'bsh-002',
+    batchId: 'bat-002',
+    inventoryItemId: 'inv-003',
+    batchNumber: 'BATCH-VALVE-001',
+    previousStatus: 'available',
+    nextStatus: 'quarantine',
+    notes: 'Seeded initial quarantine status',
+    changedAt: '2026-05-21T15:10:00.000Z'
+  }
+];
+
 function matchesSearch(values: string[], search?: string) {
   const normalized = String(search ?? '').trim().toLowerCase();
 
@@ -172,6 +206,12 @@ export async function getBatchById(id: string) {
   return batchStore.find((item) => item.id === id) ?? null;
 }
 
+export function listBatchStatusHistory(batchId: string) {
+  return [...batchStatusHistoryStore]
+    .filter((item) => item.batchId === batchId)
+    .sort((a, b) => new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime());
+}
+
 export async function createBatch(input: CreateBatchInput) {
   const record: BatchRecord = {
     id: 'bat-' + Date.now(),
@@ -203,6 +243,21 @@ export async function createBatch(input: CreateBatchInput) {
   };
 
   batchStore = [record, ...batchStore];
+
+  batchStatusHistoryStore = [
+    {
+      id: 'bsh-' + Date.now(),
+      batchId: record.id,
+      inventoryItemId: record.inventoryItemId,
+      batchNumber: record.batchNumber,
+      previousStatus: record.batchStatus,
+      nextStatus: record.batchStatus,
+      notes: record.notes || 'Batch created',
+      changedAt: record.updatedAt
+    },
+    ...batchStatusHistoryStore
+  ];
+
   return record;
 }
 
@@ -231,5 +286,20 @@ export async function updateBatchStatus(
   };
 
   batchStore[index] = updated;
+
+  batchStatusHistoryStore = [
+    {
+      id: 'bsh-' + Date.now(),
+      batchId: updated.id,
+      inventoryItemId: updated.inventoryItemId,
+      batchNumber: updated.batchNumber,
+      previousStatus: current.batchStatus,
+      nextStatus,
+      notes: notes || `Status changed to ${nextStatus}`,
+      changedAt: updated.updatedAt
+    },
+    ...batchStatusHistoryStore
+  ];
+
   return updated;
 }

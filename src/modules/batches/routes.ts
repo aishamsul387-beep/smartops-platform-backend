@@ -7,6 +7,7 @@ import {
   createBatch,
   getBatchById,
   getBatchPersistenceMode,
+  listBatchStatusHistory,
   listBatches,
   updateBatchStatus,
   type BatchStatus
@@ -129,6 +130,26 @@ batchesRouter.get(
     }
 
     return ok(response, item, 200);
+  })
+);
+
+batchesRouter.get(
+  '/:id/status-history',
+  asyncHandler(async (request, response) => {
+    const id = readSingle(request.params.id as string | string[] | undefined);
+
+    const batch = await getBatchById(id);
+
+    if (!batch) {
+      throw new AppError({
+        status: 404,
+        code: 'BATCH_NOT_FOUND',
+        message: 'Batch not found'
+      });
+    }
+
+    const items = listBatchStatusHistory(id);
+    return ok(response, items, 200);
   })
 );
 
