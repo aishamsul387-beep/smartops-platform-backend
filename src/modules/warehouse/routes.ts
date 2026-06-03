@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { created, ok } from '../../common/http/api-response';
 import { asyncHandler } from '../../common/utils/async-handler';
 import { AppError } from '../../common/errors/app-error';
@@ -10,6 +10,7 @@ import {
   listWarehouseLocations,
   toggleWarehouseLocationActive,
   updateWarehouseLocation,
+  type WarehouseCapacityUom,
   type WarehouseLocationStatus,
   type WarehouseLocationType
 } from './store';
@@ -25,7 +26,16 @@ function readSingle(value: string | string[] | undefined) {
 }
 
 const allowedStatuses: WarehouseLocationStatus[] = ['empty', 'occupied', 'blocked'];
-const allowedTypes: WarehouseLocationType[] = ['rack', 'floor', 'bulk', 'staging', 'quarantine'];
+const allowedTypes: WarehouseLocationType[] = [
+  'rack',
+  'floor',
+  'bulk',
+  'staging',
+  'quarantine',
+  'shelves',
+  'island'
+];
+const allowedCapacityUom: WarehouseCapacityUom[] = ['pallet', 'pcs', 'carton'];
 
 function requiredText(value: unknown, field: string, min = 1, max = 120) {
   const text = String(value ?? '').trim();
@@ -82,7 +92,7 @@ function requiredNumber(value: unknown, field: string, min = 0) {
 }
 
 function normalizeStatus(value: unknown) {
-  const status = String(value ?? '').trim() as WarehouseLocationStatus;
+  const status = String(value ?? '').trim().toLowerCase() as WarehouseLocationStatus;
 
   if (!allowedStatuses.includes(status)) {
     throw new AppError({
@@ -96,17 +106,35 @@ function normalizeStatus(value: unknown) {
 }
 
 function normalizeType(value: unknown) {
-  const type = String(value ?? '').trim() as WarehouseLocationType;
+  const type = String(value ?? '').trim().toLowerCase() as WarehouseLocationType;
 
   if (!allowedTypes.includes(type)) {
     throw new AppError({
       status: 400,
       code: 'VALIDATION_ERROR',
-      message: 'locationType must be one of: rack, floor, bulk, staging, quarantine'
+      message: 'locationType must be one of: rack, floor, bulk, staging, quarantine, shelves, island'
     });
   }
 
   return type;
+}
+
+function normalizeCapacityUom(value: unknown) {
+  const normalized = String(value ?? '').trim().toLowerCase() as WarehouseCapacityUom;
+
+  if (!normalized) {
+    return 'pallet' as WarehouseCapacityUom;
+  }
+
+  if (!allowedCapacityUom.includes(normalized)) {
+    throw new AppError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message: "capacityUom must be either 'pallet', 'pcs', or 'carton'"
+    });
+  }
+
+  return normalized;
 }
 
 warehouseRouter.get(
@@ -189,6 +217,7 @@ warehouseRouter.post(
       bin: requiredText(request.body?.bin, 'bin', 1, 20),
       locationType: normalizeType(request.body?.locationType),
       status: normalizeStatus(request.body?.status),
+      capacityUom: normalizeCapacityUom(request.body?.capacityUom),
       palletCapacity: requiredNumber(request.body?.palletCapacity, 'palletCapacity', 0),
       usedPalletCapacity: requiredNumber(request.body?.usedPalletCapacity, 'usedPalletCapacity', 0),
       cubicCapacityM3: requiredNumber(request.body?.cubicCapacityM3, 'cubicCapacityM3', 0),
@@ -226,6 +255,7 @@ warehouseRouter.put(
       bin: requiredText(request.body?.bin, 'bin', 1, 20),
       locationType: normalizeType(request.body?.locationType),
       status: normalizeStatus(request.body?.status),
+      capacityUom: normalizeCapacityUom(request.body?.capacityUom),
       palletCapacity: requiredNumber(request.body?.palletCapacity, 'palletCapacity', 0),
       usedPalletCapacity: requiredNumber(request.body?.usedPalletCapacity, 'usedPalletCapacity', 0),
       cubicCapacityM3: requiredNumber(request.body?.cubicCapacityM3, 'cubicCapacityM3', 0),

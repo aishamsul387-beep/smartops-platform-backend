@@ -1,4 +1,4 @@
-export type WarehouseLocationStatus = 'empty' | 'occupied' | 'blocked';
+﻿export type WarehouseLocationStatus = 'empty' | 'occupied' | 'blocked';
 export type WarehouseLocationType =
   | 'rack'
   | 'floor'
@@ -7,6 +7,8 @@ export type WarehouseLocationType =
   | 'quarantine'
   | 'shelves'
   | 'island';
+
+export type WarehouseCapacityUom = 'pallet' | 'pcs' | 'carton';
 
 export interface WarehouseLocationRecord {
   id: string;
@@ -19,6 +21,7 @@ export interface WarehouseLocationRecord {
   bin: string;
   locationType: WarehouseLocationType;
   status: WarehouseLocationStatus;
+  capacityUom: WarehouseCapacityUom;
   palletCapacity: number;
   usedPalletCapacity: number;
   cubicCapacityM3: number;
@@ -38,6 +41,7 @@ export interface CreateWarehouseLocationInput {
   bin: string;
   locationType: WarehouseLocationType;
   status: WarehouseLocationStatus;
+  capacityUom: WarehouseCapacityUom;
   palletCapacity: number;
   usedPalletCapacity: number;
   cubicCapacityM3: number;
@@ -72,6 +76,7 @@ let warehouseLocationStore: WarehouseLocationRecord[] = [
     bin: '01',
     locationType: 'rack',
     status: 'occupied',
+    capacityUom: 'pallet',
     palletCapacity: 4,
     usedPalletCapacity: 2,
     cubicCapacityM3: 12,
@@ -91,7 +96,8 @@ let warehouseLocationStore: WarehouseLocationRecord[] = [
     bin: '02',
     locationType: 'shelves',
     status: 'empty',
-    palletCapacity: 6,
+    capacityUom: 'pcs',
+    palletCapacity: 240,
     usedPalletCapacity: 0,
     cubicCapacityM3: 18,
     usedCubicCapacityM3: 0,
@@ -110,13 +116,34 @@ let warehouseLocationStore: WarehouseLocationRecord[] = [
     bin: '01',
     locationType: 'island',
     status: 'blocked',
-    palletCapacity: 2,
-    usedPalletCapacity: 1,
+    capacityUom: 'pcs',
+    palletCapacity: 80,
+    usedPalletCapacity: 24,
     cubicCapacityM3: 5,
     usedCubicCapacityM3: 2,
     isActive: true,
     notes: 'Outlet display island',
     updatedAt: '2026-05-28T08:20:00.000Z'
+  },
+  {
+    id: 'loc-004',
+    warehouseCode: 'OUT-001',
+    warehouseName: 'Outlet 1',
+    locationCode: 'BF-01-01-01',
+    zone: 'BF',
+    aisle: '01',
+    levelCode: '01',
+    bin: '01',
+    locationType: 'floor',
+    status: 'empty',
+    capacityUom: 'carton',
+    palletCapacity: 24,
+    usedPalletCapacity: 6,
+    cubicCapacityM3: 10,
+    usedCubicCapacityM3: 2,
+    isActive: true,
+    notes: 'Outlet buffer stock in cartons',
+    updatedAt: '2026-05-28T08:30:00.000Z'
   }
 ];
 
@@ -156,6 +183,27 @@ function normalizeType(value: string): WarehouseLocationType {
   }
 
   throw new Error('locationType must be one of: rack, floor, bulk, staging, quarantine, shelves, island');
+}
+
+function normalizeCapacityUom(value?: string): WarehouseCapacityUom {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (!normalized) {
+    return 'pallet';
+  }
+
+  if (normalized === 'pallet' || normalized === 'pcs' || normalized === 'carton') {
+    return normalized;
+  }
+
+  throw new Error("capacityUom must be either 'pallet', 'pcs', or 'carton'");
+}
+
+function normalizeWarehouseLocationRecord(item: WarehouseLocationRecord): WarehouseLocationRecord {
+  return {
+    ...item,
+    capacityUom: normalizeCapacityUom(item.capacityUom)
+  };
 }
 
 function toNumber(value: string, field: string, min = 0) {
@@ -218,41 +266,45 @@ export function listWarehouseLocations(filters?: {
   type?: string;
   active?: string;
 }) {
-  return warehouseLocationStore.filter((item) => {
-    const okSearch = matchesSearch(
-      [
-        item.warehouseCode,
-        item.warehouseName,
-        item.locationCode,
-        item.zone,
-        item.aisle,
-        item.levelCode,
-        item.bin,
-        item.locationType,
-        item.status
-      ],
-      filters?.search
-    );
+  return warehouseLocationStore
+    .map(normalizeWarehouseLocationRecord)
+    .filter((item) => {
+      const okSearch = matchesSearch(
+        [
+          item.warehouseCode,
+          item.warehouseName,
+          item.locationCode,
+          item.zone,
+          item.aisle,
+          item.levelCode,
+          item.bin,
+          item.locationType,
+          item.status,
+          item.capacityUom
+        ],
+        filters?.search
+      );
 
-    const status = String(filters?.status ?? '').trim();
-    const okStatus = !status || status === 'all' || item.status === status;
+      const status = String(filters?.status ?? '').trim();
+      const okStatus = !status || status === 'all' || item.status === status;
 
-    const type = String(filters?.type ?? '').trim();
-    const okType = !type || type === 'all' || item.locationType === type;
+      const type = String(filters?.type ?? '').trim();
+      const okType = !type || type === 'all' || item.locationType === type;
 
-    const active = String(filters?.active ?? '').trim();
-    const okActive =
-      !active ||
-      active === 'all' ||
-      (active === 'active' && item.isActive) ||
-      (active === 'inactive' && !item.isActive);
+      const active = String(filters?.active ?? '').trim();
+      const okActive =
+        !active ||
+        active === 'all' ||
+        (active === 'active' && item.isActive) ||
+        (active === 'inactive' && !item.isActive);
 
-    return okSearch && okStatus && okType && okActive;
-  });
+      return okSearch && okStatus && okType && okActive;
+    });
 }
 
 export function getWarehouseLocationById(id: string) {
-  return warehouseLocationStore.find((item) => item.id === id) ?? null;
+  const item = warehouseLocationStore.find((row) => row.id === id) ?? null;
+  return item ? normalizeWarehouseLocationRecord(item) : null;
 }
 
 export function createWarehouseLocation(input: CreateWarehouseLocationInput) {
@@ -267,6 +319,7 @@ export function createWarehouseLocation(input: CreateWarehouseLocationInput) {
     bin: input.bin,
     locationType: input.locationType,
     status: input.status,
+    capacityUom: normalizeCapacityUom(input.capacityUom),
     palletCapacity: input.palletCapacity,
     usedPalletCapacity: input.usedPalletCapacity,
     cubicCapacityM3: input.cubicCapacityM3,
@@ -277,7 +330,7 @@ export function createWarehouseLocation(input: CreateWarehouseLocationInput) {
   };
 
   warehouseLocationStore = [record, ...warehouseLocationStore];
-  return record;
+  return normalizeWarehouseLocationRecord(record);
 }
 
 export function updateWarehouseLocation(input: UpdateWarehouseLocationInput) {
@@ -298,6 +351,7 @@ export function updateWarehouseLocation(input: UpdateWarehouseLocationInput) {
     bin: input.bin,
     locationType: input.locationType,
     status: input.status,
+    capacityUom: normalizeCapacityUom(input.capacityUom),
     palletCapacity: input.palletCapacity,
     usedPalletCapacity: input.usedPalletCapacity,
     cubicCapacityM3: input.cubicCapacityM3,
@@ -308,7 +362,7 @@ export function updateWarehouseLocation(input: UpdateWarehouseLocationInput) {
   };
 
   warehouseLocationStore[index] = updated;
-  return updated;
+  return normalizeWarehouseLocationRecord(updated);
 }
 
 export function toggleWarehouseLocationActive(id: string, isActive: boolean) {
@@ -320,7 +374,7 @@ export function toggleWarehouseLocationActive(id: string, isActive: boolean) {
 
   item.isActive = isActive;
   item.updatedAt = new Date().toISOString();
-  return item;
+  return normalizeWarehouseLocationRecord(item);
 }
 
 export function exportWarehouseLocationsCsv() {
@@ -334,6 +388,7 @@ export function exportWarehouseLocationsCsv() {
     'bin',
     'locationType',
     'status',
+    'capacityUom',
     'palletCapacity',
     'usedPalletCapacity',
     'cubicCapacityM3',
@@ -342,8 +397,10 @@ export function exportWarehouseLocationsCsv() {
     'notes'
   ].join(',');
 
-  const rows = warehouseLocationStore.map((item) =>
-    [
+  const rows = warehouseLocationStore.map((rawItem) => {
+    const item = normalizeWarehouseLocationRecord(rawItem);
+
+    return [
       csvEscape(item.warehouseCode),
       csvEscape(item.warehouseName),
       csvEscape(item.locationCode),
@@ -353,14 +410,15 @@ export function exportWarehouseLocationsCsv() {
       csvEscape(item.bin),
       csvEscape(item.locationType),
       csvEscape(item.status),
+      csvEscape(item.capacityUom),
       csvEscape(item.palletCapacity),
       csvEscape(item.usedPalletCapacity),
       csvEscape(item.cubicCapacityM3),
       csvEscape(item.usedCubicCapacityM3),
       csvEscape(item.isActive),
       csvEscape(item.notes)
-    ].join(',')
-  );
+    ].join(',');
+  });
 
   return [header, ...rows].join('\n');
 }
@@ -376,7 +434,27 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
   }
 
   const header = splitCsvLine(lines[0]);
-  const expectedHeader = [
+
+  const currentHeader = [
+    'warehouseCode',
+    'warehouseName',
+    'locationCode',
+    'zone',
+    'aisle',
+    'levelCode',
+    'bin',
+    'locationType',
+    'status',
+    'capacityUom',
+    'palletCapacity',
+    'usedPalletCapacity',
+    'cubicCapacityM3',
+    'usedCubicCapacityM3',
+    'isActive',
+    'notes'
+  ];
+
+  const legacyHeader = [
     'warehouseCode',
     'warehouseName',
     'locationCode',
@@ -394,12 +472,18 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     'notes'
   ];
 
-  const headerMatches =
-    header.length === expectedHeader.length &&
-    header.every((value, index) => value === expectedHeader[index]);
+  const matchesCurrentHeader =
+    header.length === currentHeader.length &&
+    header.every((value, index) => value === currentHeader[index]);
 
-  if (!headerMatches) {
-    throw new Error(`CSV header must be exactly: ${expectedHeader.join(',')}`);
+  const matchesLegacyHeader =
+    header.length === legacyHeader.length &&
+    header.every((value, index) => value === legacyHeader[index]);
+
+  if (!matchesCurrentHeader && !matchesLegacyHeader) {
+    throw new Error(
+      `CSV header must be exactly either: ${currentHeader.join(',')} OR ${legacyHeader.join(',')}`
+    );
   }
 
   let inserted = 0;
@@ -413,27 +497,69 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     try {
       const cols = splitCsvLine(lines[i]);
 
-      if (cols.length !== expectedHeader.length) {
+      if (matchesCurrentHeader && cols.length !== currentHeader.length) {
         throw new Error('Column count does not match header');
       }
 
-      const [
-        warehouseCode,
-        warehouseName,
-        locationCode,
-        zone,
-        aisle,
-        levelCode,
-        bin,
-        locationType,
-        status,
-        palletCapacity,
-        usedPalletCapacity,
-        cubicCapacityM3,
-        usedCubicCapacityM3,
-        isActive,
-        notes
-      ] = cols;
+      if (matchesLegacyHeader && cols.length !== legacyHeader.length) {
+        throw new Error('Column count does not match header');
+      }
+
+      let warehouseCode = '';
+      let warehouseName = '';
+      let locationCode = '';
+      let zone = '';
+      let aisle = '';
+      let levelCode = '';
+      let bin = '';
+      let locationType = '';
+      let status = '';
+      let capacityUom = 'pallet';
+      let palletCapacity = '';
+      let usedPalletCapacity = '';
+      let cubicCapacityM3 = '';
+      let usedCubicCapacityM3 = '';
+      let isActive = '';
+      let notes = '';
+
+      if (matchesCurrentHeader) {
+        [
+          warehouseCode,
+          warehouseName,
+          locationCode,
+          zone,
+          aisle,
+          levelCode,
+          bin,
+          locationType,
+          status,
+          capacityUom,
+          palletCapacity,
+          usedPalletCapacity,
+          cubicCapacityM3,
+          usedCubicCapacityM3,
+          isActive,
+          notes
+        ] = cols;
+      } else {
+        [
+          warehouseCode,
+          warehouseName,
+          locationCode,
+          zone,
+          aisle,
+          levelCode,
+          bin,
+          locationType,
+          status,
+          palletCapacity,
+          usedPalletCapacity,
+          cubicCapacityM3,
+          usedCubicCapacityM3,
+          isActive,
+          notes
+        ] = cols;
+      }
 
       if (!warehouseCode || !warehouseName || !locationCode || !zone || !aisle || !levelCode || !bin) {
         throw new Error('Required text fields are missing');
@@ -441,6 +567,7 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
 
       const normalizedType = normalizeType(locationType);
       const normalizedStatus = normalizeStatus(status);
+      const normalizedCapacityUom = normalizeCapacityUom(capacityUom);
 
       const payload: CreateWarehouseLocationInput = {
         warehouseCode,
@@ -452,6 +579,7 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
         bin,
         locationType: normalizedType,
         status: normalizedStatus,
+        capacityUom: normalizedCapacityUom,
         palletCapacity: toNumber(palletCapacity, 'palletCapacity', 0),
         usedPalletCapacity: toNumber(usedPalletCapacity, 'usedPalletCapacity', 0),
         cubicCapacityM3: toNumber(cubicCapacityM3, 'cubicCapacityM3', 0),
