@@ -9,6 +9,7 @@ export type WarehouseLocationType =
   | 'island';
 
 export type WarehouseCapacityUom = 'pallet' | 'pcs' | 'carton';
+export type WarehouseSiteScope = 'all' | 'warehouse' | 'outlet';
 
 export interface WarehouseLocationRecord {
   id: string;
@@ -64,6 +65,29 @@ export interface WarehouseLocationImportResult {
   }>;
 }
 
+export interface WarehouseUtilizationSummary {
+  siteScope: WarehouseSiteScope;
+  warehouseCode: string | null;
+  totalLocations: number;
+  activeLocations: number;
+  inactiveLocations: number;
+  emptyLocations: number;
+  occupiedLocations: number;
+  blockedLocations: number;
+  fullLocations: number;
+  fullLocationPct: number;
+  palletCapacityTotal: number;
+  palletCapacityUsed: number;
+  palletUtilizationPct: number;
+  pcsCapacityTotal: number;
+  pcsCapacityUsed: number;
+  pcsUtilizationPct: number;
+  cartonCapacityTotal: number;
+  cartonCapacityUsed: number;
+  cartonUtilizationPct: number;
+  updatedAt: string;
+}
+
 let warehouseLocationStore: WarehouseLocationRecord[] = [
   {
     id: 'loc-001',
@@ -107,7 +131,7 @@ let warehouseLocationStore: WarehouseLocationRecord[] = [
   },
   {
     id: 'loc-003',
-    warehouseCode: 'OUT-001',
+    warehouseCode: 'OTL-001',
     warehouseName: 'Outlet 1',
     locationCode: 'IS-01-01-01',
     zone: 'IS',
@@ -127,7 +151,7 @@ let warehouseLocationStore: WarehouseLocationRecord[] = [
   },
   {
     id: 'loc-004',
-    warehouseCode: 'OUT-001',
+    warehouseCode: 'OTL-001',
     warehouseName: 'Outlet 1',
     locationCode: 'BF-01-01-01',
     zone: 'BF',
@@ -199,6 +223,33 @@ function normalizeCapacityUom(value?: string): WarehouseCapacityUom {
   throw new Error("capacityUom must be either 'pallet', 'pcs', or 'carton'");
 }
 
+function normalizeSiteScope(value?: string): WarehouseSiteScope {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (!normalized || normalized === 'all') {
+    return 'all';
+  }
+
+  if (normalized === 'warehouse' || normalized === 'outlet') {
+    return normalized;
+  }
+
+  throw new Error("siteScope must be one of: all, warehouse, outlet");
+}
+
+function normalizeWarehouseCodeFilter(value?: string) {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+function getSiteScopeForWarehouseCode(warehouseCode: string): Exclude<WarehouseSiteScope, 'all'> {
+  const normalized = warehouseCode.trim().toUpperCase();
+  return normalized.startsWith('OTL-') || normalized.startsWith('OUT-') ? 'outlet' : 'warehouse';
+}
+
+function isFullLocation(item: WarehouseLocationRecord) {
+  return item.palletCapacity > 0 && item.usedPalletCapacity >= item.palletCapacity;
+}
+
 function normalizeWarehouseLocationRecord(item: WarehouseLocationRecord): WarehouseLocationRecord {
   return {
     ...item,
@@ -260,46 +311,165 @@ function csvEscape(value: unknown) {
   return text;
 }
 
-export function listWarehouseLocations(filters?: {
+function roundToTwo(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function calculateUtilizationPct(used: number, total: number) {
+  if (total <= 0) {
+    return 0;
+  }
+
+  return roundToTwo((used / total) * 100);
+}
+
+function summarizeCapacityByUom(items: WarehouseLocationRecord[], capacityUom: WarehouseCapacityUom) {
+  const filtered = items.filter((item) => item.capacityUom === capacityUom);
+
+  const total = filtered.reduce((sum, item) => sum + item.palletCapacity, 0);
+  const used = filtered.reduce((sum, item) => sum + item.usedPalletCapacity, 0);
+
+  return {
+    total,
+    used,
+    utilizationPct: calculateUtilizationPct(used, total)
+  };
+}
+
+function filterWarehouseLocations(items: WarehouseLocationRecord[], filters?: {
   search?: string;
+  locationCode?: string;
   status?: string;
   type?: string;
   active?: string;
+  warehouseCode?: string;
+  siteScope?: string;
 }) {
-  return warehouseLocationStore
-    .map(normalizeWarehouseLocationRecord)
-    .filter((item) => {
-      const okSearch = matchesSearch(
-        [
-          item.warehouseCode,
-          item.warehouseName,
-          item.locationCode,
-          item.zone,
-          item.aisle,
-          item.levelCode,
-          item.bin,
-          item.locationType,
-          item.status,
-          item.capacityUom
-        ],
-        filters?.search
-      );
+  const siteScope = normalizeSiteScope(filters?.siteScope);
+  const warehouseCode = normalizeWarehouseCodeFilter(filters?.warehouseCode);
+  const locationCodeFilter = String(filters?.locationCode ?? '').trim().toLowerCase();
 
-      const status = String(filters?.status ?? '').trim();
-      const okStatus = !status || status === 'all' || item.status === status;
+  return items.filter((item) => {
+    const itemSiteScope = getSiteScopeForWarehouseCode(item.warehouseCode);
+    const matchesSiteScope = siteScope === 'all' || itemSiteScope === siteScope;
+    const matchesWarehouseCode = !warehouseCode || item.warehouseCode.toUpperCase() === warehouseCode;
 
-      const type = String(filters?.type ?? '').trim();
-      const okType = !type || type === 'all' || item.locationType === type;
+    const matchesLocationCode =
+      !locationCodeFilter || item.locationCode.toLowerCase().includes(locationCodeFilter);
 
-      const active = String(filters?.active ?? '').trim();
-      const okActive =
-        !active ||
-        active === 'all' ||
-        (active === 'active' && item.isActive) ||
-        (active === 'inactive' && !item.isActive);
+    const okSearch = matchesSearch(
+      [
+        item.warehouseCode,
+        item.warehouseName,
+        item.locationCode,
+        item.zone,
+        item.aisle,
+        item.levelCode,
+        item.bin,
+        item.locationType,
+        item.status,
+        item.capacityUom
+      ],
+      filters?.search
+    );
 
-      return okSearch && okStatus && okType && okActive;
-    });
+    const status = String(filters?.status ?? '').trim();
+    const okStatus = !status || status === 'all' || item.status === status;
+
+    const type = String(filters?.type ?? '').trim();
+    const okType = !type || type === 'all' || item.locationType === type;
+
+    const active = String(filters?.active ?? '').trim();
+    const okActive =
+      !active ||
+      active === 'all' ||
+      (active === 'active' && item.isActive) ||
+      (active === 'inactive' && !item.isActive);
+
+    return (
+      matchesSiteScope &&
+      matchesWarehouseCode &&
+      matchesLocationCode &&
+      okSearch &&
+      okStatus &&
+      okType &&
+      okActive
+    );
+  });
+}
+
+export function getWarehouseUtilizationSummary(filters?: {
+  search?: string;
+  locationCode?: string;
+  status?: string;
+  type?: string;
+  active?: string;
+  warehouseCode?: string;
+  siteScope?: string;
+}): WarehouseUtilizationSummary {
+  const normalizedItems = warehouseLocationStore.map(normalizeWarehouseLocationRecord);
+  const items = filterWarehouseLocations(normalizedItems, filters);
+
+  const siteScope = normalizeSiteScope(filters?.siteScope);
+  const warehouseCode = normalizeWarehouseCodeFilter(filters?.warehouseCode);
+
+  const totalLocations = items.length;
+  const activeLocations = items.filter((item) => item.isActive).length;
+  const inactiveLocations = totalLocations - activeLocations;
+  const emptyLocations = items.filter((item) => item.status === 'empty').length;
+  const occupiedLocations = items.filter((item) => item.status === 'occupied').length;
+  const blockedLocations = items.filter((item) => item.status === 'blocked').length;
+  const fullLocations = items.filter(isFullLocation).length;
+  const fullLocationBase = activeLocations > 0 ? activeLocations : totalLocations;
+  const fullLocationPct = calculateUtilizationPct(fullLocations, fullLocationBase);
+
+  const palletSummary = summarizeCapacityByUom(items, 'pallet');
+  const pcsSummary = summarizeCapacityByUom(items, 'pcs');
+  const cartonSummary = summarizeCapacityByUom(items, 'carton');
+
+  const latestUpdatedAt = items
+    .map((item) => item.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0] ?? new Date().toISOString();
+
+  return {
+    siteScope,
+    warehouseCode: warehouseCode || null,
+    totalLocations,
+    activeLocations,
+    inactiveLocations,
+    emptyLocations,
+    occupiedLocations,
+    blockedLocations,
+    fullLocations,
+    fullLocationPct,
+    palletCapacityTotal: palletSummary.total,
+    palletCapacityUsed: palletSummary.used,
+    palletUtilizationPct: palletSummary.utilizationPct,
+    pcsCapacityTotal: pcsSummary.total,
+    pcsCapacityUsed: pcsSummary.used,
+    pcsUtilizationPct: pcsSummary.utilizationPct,
+    cartonCapacityTotal: cartonSummary.total,
+    cartonCapacityUsed: cartonSummary.used,
+    cartonUtilizationPct: cartonSummary.utilizationPct,
+    updatedAt: latestUpdatedAt
+  };
+}
+
+export function listWarehouseLocations(filters?: {
+  search?: string;
+  locationCode?: string;
+  status?: string;
+  type?: string;
+  active?: string;
+  warehouseCode?: string;
+  siteScope?: string;
+}) {
+  return filterWarehouseLocations(
+    warehouseLocationStore.map(normalizeWarehouseLocationRecord),
+    filters
+  );
 }
 
 export function getWarehouseLocationById(id: string) {
@@ -626,3 +796,5 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     errors
   };
 }
+
+

@@ -6,6 +6,7 @@ import {
   createWarehouseLocation,
   exportWarehouseLocationsCsv,
   getWarehouseLocationById,
+  getWarehouseUtilizationSummary,
   importWarehouseLocationsCsv,
   listWarehouseLocations,
   toggleWarehouseLocationActive,
@@ -138,13 +139,33 @@ function normalizeCapacityUom(value: unknown) {
 }
 
 warehouseRouter.get(
+  '/summary',
+  asyncHandler(async (request, response) => {
+    const summary = getWarehouseUtilizationSummary({
+      search: readSingle(request.query.search as string | string[] | undefined),
+      locationCode: readSingle(request.query.locationCode as string | string[] | undefined),
+      status: readSingle(request.query.status as string | string[] | undefined),
+      type: readSingle(request.query.type as string | string[] | undefined),
+      active: readSingle(request.query.active as string | string[] | undefined),
+      siteScope: readSingle(request.query.siteScope as string | string[] | undefined),
+      warehouseCode: readSingle(request.query.warehouseCode as string | string[] | undefined)
+    });
+
+    return ok(response, summary, 200);
+  })
+);
+
+warehouseRouter.get(
   '/locations',
   asyncHandler(async (request, response) => {
     const items = listWarehouseLocations({
       search: readSingle(request.query.search as string | string[] | undefined),
+      locationCode: readSingle(request.query.locationCode as string | string[] | undefined),
       status: readSingle(request.query.status as string | string[] | undefined),
       type: readSingle(request.query.type as string | string[] | undefined),
-      active: readSingle(request.query.active as string | string[] | undefined)
+      active: readSingle(request.query.active as string | string[] | undefined),
+      siteScope: readSingle(request.query.siteScope as string | string[] | undefined),
+      warehouseCode: readSingle(request.query.warehouseCode as string | string[] | undefined)
     });
 
     return ok(
