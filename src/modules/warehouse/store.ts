@@ -448,7 +448,7 @@ function summarizeCapacityByUom(items: WarehouseLocationRecord[], capacityUom: W
   };
 }
 
-function buildDrilldownBucket(key: string, label: string, items: WarehouseLocationRecord): WarehouseUtilizationDrilldownBucket {
+function buildDrilldownBucket(key: string, label: string, items: WarehouseLocationRecord[]): WarehouseUtilizationDrilldownBucket {
   const totalLocations = items.length;
   const activeLocations = items.filter((item) => item.isActive).length;
   const inactiveLocations = totalLocations - activeLocations;
@@ -1012,3 +1012,4 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     errors
   };
 }
+
