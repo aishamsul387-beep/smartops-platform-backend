@@ -5,6 +5,7 @@ import { AppError } from '../../common/errors/app-error';
 import {
   createWarehouseLocation,
   exportWarehouseLocationsCsv,
+  getWarehouseLocationAlerts,
   getWarehouseLocationById,
   getWarehouseUtilizationDrilldown,
   getWarehouseUtilizationSummary,
@@ -187,6 +188,27 @@ warehouseRouter.get(
     });
 
     return ok(response, drilldown, 200);
+  })
+);
+
+warehouseRouter.get(
+  '/alerts',
+  asyncHandler(async (request, response) => {
+    const thresholdPctRaw = readSingle(request.query.thresholdPct as string | string[] | undefined);
+    const thresholdPct = thresholdPctRaw ? Number(thresholdPctRaw) : undefined;
+
+    const alerts = getWarehouseLocationAlerts({
+      search: readSingle(request.query.search as string | string[] | undefined),
+      locationCode: readSingle(request.query.locationCode as string | string[] | undefined),
+      status: readSingle(request.query.status as string | string[] | undefined),
+      type: readSingle(request.query.type as string | string[] | undefined),
+      active: readSingle(request.query.active as string | string[] | undefined),
+      siteScope: readSingle(request.query.siteScope as string | string[] | undefined),
+      warehouseCode: readSingle(request.query.warehouseCode as string | string[] | undefined),
+      thresholdPct: Number.isFinite(thresholdPct) ? thresholdPct : undefined
+    });
+
+    return ok(response, alerts, 200);
   })
 );
 

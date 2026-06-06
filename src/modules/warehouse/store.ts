@@ -11,6 +11,7 @@ export type WarehouseLocationType =
 export type WarehouseCapacityUom = 'pallet' | 'pcs' | 'carton';
 export type WarehouseSiteScope = 'all' | 'warehouse' | 'outlet';
 export type WarehouseSiteType = 'warehouse' | 'outlet';
+export type WarehouseAlertSeverity = 'near_full' | 'full';
 
 export interface WarehouseSiteRecord {
   siteCode: string;
@@ -122,6 +123,41 @@ export interface WarehouseUtilizationDrilldown {
   warehouseCode: string | null;
   byLocationType: WarehouseUtilizationDrilldownBucket[];
   byZone: WarehouseUtilizationDrilldownBucket[];
+  updatedAt: string;
+}
+
+export interface WarehouseLocationAlertRecord {
+  id: string;
+  severity: WarehouseAlertSeverity;
+  utilizationPct: number;
+  siteCode: string;
+  siteName: string;
+  siteType: WarehouseSiteType;
+  warehouseCode: string;
+  warehouseName: string;
+  locationCode: string;
+  zone: string;
+  aisle: string;
+  levelCode: string;
+  bin: string;
+  locationType: WarehouseLocationType;
+  capacityUom: WarehouseCapacityUom;
+  capacityTotal: number;
+  capacityUsed: number;
+  remainingCapacity: number;
+  status: WarehouseLocationStatus;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface WarehouseLocationAlertSummary {
+  siteScope: WarehouseSiteScope;
+  warehouseCode: string | null;
+  thresholdPct: number;
+  totalAlertLocations: number;
+  nearFullLocations: number;
+  fullLocations: number;
+  items: WarehouseLocationAlertRecord[];
   updatedAt: string;
 }
 
@@ -353,6 +389,14 @@ function getRecordCompositeKey(item: WarehouseLocationRecord) {
 
 function isFullLocation(item: WarehouseLocationRecord) {
   return item.palletCapacity > 0 && item.usedPalletCapacity >= item.palletCapacity;
+}
+
+function getUtilizationPct(item: WarehouseLocationRecord) {
+  if (item.palletCapacity <= 0) {
+    return 0;
+  }
+
+  return calculateUtilizationPct(item.usedPalletCapacity, item.palletCapacity);
 }
 
 function normalizeWarehouseLocationRecord(item: WarehouseLocationRecord): WarehouseLocationRecord {
@@ -652,6 +696,94 @@ export function getWarehouseUtilizationDrilldown(filters?: {
     warehouseCode: warehouseCode || null,
     byLocationType: createDrilldown(items, (item) => item.locationType),
     byZone: createDrilldown(items, (item) => item.zone),
+    updatedAt: latestUpdatedAt
+  };
+}
+
+export function getWarehouseLocationAlerts(filters?: {
+  search?: string;
+  locationCode?: string;
+  status?: string;
+  type?: string;
+  active?: string;
+  warehouseCode?: string;
+  siteScope?: string;
+  thresholdPct?: number;
+}): WarehouseLocationAlertSummary {
+  const normalizedItems = warehouseLocationStore.map(normalizeWarehouseLocationRecord);
+  const items = filterWarehouseLocations(normalizedItems, filters);
+  const siteScope = normalizeSiteScope(filters?.siteScope);
+  const warehouseCode = normalizeWarehouseCodeFilter(filters?.warehouseCode);
+  const thresholdPctRaw = Number(filters?.thresholdPct);
+  const thresholdPct = Number.isFinite(thresholdPctRaw) && thresholdPctRaw > 0 && thresholdPctRaw < 100
+    ? thresholdPctRaw
+    : 80;
+
+  const alertItems: WarehouseLocationAlertRecord[] = items
+    .filter((item) => item.isActive && item.palletCapacity > 0)
+    .map((item) => {
+      const site = getWarehouseSiteRecord({
+        warehouseCode: item.warehouseCode,
+        warehouseName: item.warehouseName
+      });
+      const utilizationPct = getUtilizationPct(item);
+      const remainingCapacity = Math.max(0, item.palletCapacity - item.usedPalletCapacity);
+      const severity: WarehouseAlertSeverity | null =
+        utilizationPct >= 100 ? 'full' : utilizationPct >= thresholdPct ? 'near_full' : null;
+
+      if (!severity) {
+        return null;
+      }
+
+      return {
+        id: item.id,
+        severity,
+        utilizationPct,
+        siteCode: site.siteCode,
+        siteName: site.siteName,
+        siteType: site.siteType,
+        warehouseCode: item.warehouseCode,
+        warehouseName: item.warehouseName,
+        locationCode: item.locationCode,
+        zone: item.zone,
+        aisle: item.aisle,
+        levelCode: item.levelCode,
+        bin: item.bin,
+        locationType: item.locationType,
+        capacityUom: item.capacityUom,
+        capacityTotal: item.palletCapacity,
+        capacityUsed: item.usedPalletCapacity,
+        remainingCapacity,
+        status: item.status,
+        isActive: item.isActive,
+        updatedAt: item.updatedAt
+      };
+    })
+    .filter((item): item is WarehouseLocationAlertRecord => item !== null)
+    .sort((a, b) => {
+      if (a.severity !== b.severity) {
+        return a.severity === 'full' ? -1 : 1;
+      }
+
+      return b.utilizationPct - a.utilizationPct;
+    });
+
+  const nearFullLocations = alertItems.filter((item) => item.severity === 'near_full').length;
+  const fullLocations = alertItems.filter((item) => item.severity === 'full').length;
+  const latestUpdatedAt = alertItems
+    .map((item) => item.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0] ?? new Date().toISOString();
+
+  return {
+    siteScope,
+    warehouseCode: warehouseCode || null,
+    thresholdPct,
+    totalAlertLocations: alertItems.length,
+    nearFullLocations,
+    fullLocations,
+    items: alertItems,
     updatedAt: latestUpdatedAt
   };
 }
@@ -1012,4 +1144,3 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     errors
   };
 }
-
