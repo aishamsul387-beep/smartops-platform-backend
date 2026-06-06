@@ -10,6 +10,13 @@ export type WarehouseLocationType =
 
 export type WarehouseCapacityUom = 'pallet' | 'pcs' | 'carton';
 export type WarehouseSiteScope = 'all' | 'warehouse' | 'outlet';
+export type WarehouseSiteType = 'warehouse' | 'outlet';
+
+export interface WarehouseSiteRecord {
+  siteCode: string;
+  siteName: string;
+  siteType: WarehouseSiteType;
+}
 
 export interface WarehouseLocationRecord {
   id: string;
@@ -241,9 +248,77 @@ function normalizeWarehouseCodeFilter(value?: string) {
   return String(value ?? '').trim().toUpperCase();
 }
 
+function normalizeSiteCode(value?: string) {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+function inferSiteTypeFromCode(siteCode: string): WarehouseSiteType {
+  const normalized = normalizeSiteCode(siteCode);
+
+  if (normalized.startsWith('OTL-') || normalized.startsWith('OUT-')) {
+    return 'outlet';
+  }
+
+  return 'warehouse';
+}
+
+function normalizeSiteName(siteName: string, siteType: WarehouseSiteType, siteCode: string) {
+  const text = String(siteName ?? '').trim();
+
+  if (text) {
+    return text;
+  }
+
+  return siteType === 'outlet' ? `Outlet ${siteCode}` : `Warehouse ${siteCode}`;
+}
+
+export function getWarehouseSiteRecord(input: {
+  warehouseCode: string;
+  warehouseName: string;
+}): WarehouseSiteRecord {
+  const siteCode = normalizeSiteCode(input.warehouseCode);
+  const siteType = inferSiteTypeFromCode(siteCode);
+  const siteName = normalizeSiteName(input.warehouseName, siteType, siteCode);
+
+  return {
+    siteCode,
+    siteName,
+    siteType
+  };
+}
+
+export function listWarehouseSites(): WarehouseSiteRecord[] {
+  const siteMap = new Map<string, WarehouseSiteRecord>();
+
+  for (const item of warehouseLocationStore) {
+    const site = getWarehouseSiteRecord({
+      warehouseCode: item.warehouseCode,
+      warehouseName: item.warehouseName
+    });
+
+    if (!siteMap.has(site.siteCode)) {
+      siteMap.set(site.siteCode, site);
+    }
+  }
+
+  return Array.from(siteMap.values()).sort((a, b) => a.siteCode.localeCompare(b.siteCode));
+}
+
 function getSiteScopeForWarehouseCode(warehouseCode: string): Exclude<WarehouseSiteScope, 'all'> {
-  const normalized = warehouseCode.trim().toUpperCase();
-  return normalized.startsWith('OTL-') || normalized.startsWith('OUT-') ? 'outlet' : 'warehouse';
+  return inferSiteTypeFromCode(warehouseCode);
+}
+
+function getLocationCompositeKey(siteCode: string, locationCode: string) {
+  return `${siteCode.trim().toUpperCase()}::${locationCode.trim().toUpperCase()}`;
+}
+
+function getRecordCompositeKey(item: WarehouseLocationRecord) {
+  const site = getWarehouseSiteRecord({
+    warehouseCode: item.warehouseCode,
+    warehouseName: item.warehouseName
+  });
+
+  return getLocationCompositeKey(site.siteCode, item.locationCode);
 }
 
 function isFullLocation(item: WarehouseLocationRecord) {
@@ -251,8 +326,15 @@ function isFullLocation(item: WarehouseLocationRecord) {
 }
 
 function normalizeWarehouseLocationRecord(item: WarehouseLocationRecord): WarehouseLocationRecord {
+  const site = getWarehouseSiteRecord({
+    warehouseCode: item.warehouseCode,
+    warehouseName: item.warehouseName
+  });
+
   return {
     ...item,
+    warehouseCode: site.siteCode,
+    warehouseName: site.siteName,
     capacityUom: normalizeCapacityUom(item.capacityUom)
   };
 }
@@ -478,10 +560,15 @@ export function getWarehouseLocationById(id: string) {
 }
 
 export function createWarehouseLocation(input: CreateWarehouseLocationInput) {
+  const site = getWarehouseSiteRecord({
+    warehouseCode: input.warehouseCode,
+    warehouseName: input.warehouseName
+  });
+
   const record: WarehouseLocationRecord = {
     id: 'loc-' + Date.now(),
-    warehouseCode: input.warehouseCode,
-    warehouseName: input.warehouseName,
+    warehouseCode: site.siteCode,
+    warehouseName: site.siteName,
     locationCode: input.locationCode,
     zone: input.zone,
     aisle: input.aisle,
@@ -510,10 +597,15 @@ export function updateWarehouseLocation(input: UpdateWarehouseLocationInput) {
     return null;
   }
 
+  const site = getWarehouseSiteRecord({
+    warehouseCode: input.warehouseCode,
+    warehouseName: input.warehouseName
+  });
+
   const updated: WarehouseLocationRecord = {
     id: input.id,
-    warehouseCode: input.warehouseCode,
-    warehouseName: input.warehouseName,
+    warehouseCode: site.siteCode,
+    warehouseName: site.siteName,
     locationCode: input.locationCode,
     zone: input.zone,
     aisle: input.aisle,
@@ -739,9 +831,14 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
       const normalizedStatus = normalizeStatus(status);
       const normalizedCapacityUom = normalizeCapacityUom(capacityUom);
 
-      const payload: CreateWarehouseLocationInput = {
+      const site = getWarehouseSiteRecord({
         warehouseCode,
-        warehouseName,
+        warehouseName
+      });
+
+      const payload: CreateWarehouseLocationInput = {
+        warehouseCode: site.siteCode,
+        warehouseName: site.siteName,
         locationCode,
         zone,
         aisle,
@@ -758,9 +855,11 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
         notes
       };
 
-      const existingIndex = warehouseLocationStore.findIndex(
-        (item) => item.locationCode.toLowerCase() === locationCode.toLowerCase()
-      );
+      const incomingKey = getLocationCompositeKey(payload.warehouseCode, payload.locationCode);
+
+      const existingIndex = warehouseLocationStore.findIndex((item) => {
+        return getRecordCompositeKey(item) === incomingKey;
+      });
 
       if (existingIndex >= 0) {
         const existing = warehouseLocationStore[existingIndex];
@@ -796,5 +895,3 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     errors
   };
 }
-
-

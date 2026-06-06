@@ -9,6 +9,7 @@ import {
   getWarehouseUtilizationSummary,
   importWarehouseLocationsCsv,
   listWarehouseLocations,
+  listWarehouseSites,
   toggleWarehouseLocationActive,
   updateWarehouseLocation,
   type WarehouseCapacityUom,
@@ -137,6 +138,22 @@ function normalizeCapacityUom(value: unknown) {
 
   return normalized;
 }
+
+warehouseRouter.get(
+  '/sites',
+  asyncHandler(async (_request, response) => {
+    const items = listWarehouseSites();
+
+    return ok(
+      response,
+      {
+        items,
+        total: items.length
+      },
+      200
+    );
+  })
+);
 
 warehouseRouter.get(
   '/summary',
