@@ -12,11 +12,20 @@ export type WarehouseCapacityUom = 'pallet' | 'pcs' | 'carton';
 export type WarehouseSiteScope = 'all' | 'warehouse' | 'outlet';
 export type WarehouseSiteType = 'warehouse' | 'outlet';
 export type WarehouseAlertSeverity = 'near_full' | 'full';
+export type WarehouseAlertThresholdSource = 'site_override' | 'site_type_default' | 'global_default' | 'request_override';
 
 export interface WarehouseSiteRecord {
   siteCode: string;
   siteName: string;
   siteType: WarehouseSiteType;
+}
+
+export interface WarehouseAlertThresholdRecord {
+  siteCode: string | null;
+  siteName: string;
+  siteType: WarehouseSiteType | 'all';
+  thresholdPct: number;
+  source: WarehouseAlertThresholdSource;
 }
 
 export interface WarehouseLocationRecord {
@@ -130,6 +139,7 @@ export interface WarehouseLocationAlertRecord {
   id: string;
   severity: WarehouseAlertSeverity;
   utilizationPct: number;
+  thresholdPctApplied: number;
   siteCode: string;
   siteName: string;
   siteType: WarehouseSiteType;
@@ -157,9 +167,18 @@ export interface WarehouseLocationAlertSummary {
   totalAlertLocations: number;
   nearFullLocations: number;
   fullLocations: number;
+  appliedThresholds: WarehouseAlertThresholdRecord[];
   items: WarehouseLocationAlertRecord[];
   updatedAt: string;
 }
+
+const DEFAULT_ALERT_THRESHOLD_PCT = 80;
+const DEFAULT_ALERT_THRESHOLD_BY_SITE_TYPE: Record<WarehouseSiteType, number> = {
+  warehouse: 90,
+  outlet: 80
+};
+
+let warehouseAlertThresholdOverrides: Record<string, number> = {};
 
 let warehouseLocationStore: WarehouseLocationRecord[] = [
   {
@@ -318,6 +337,16 @@ function normalizeSiteCode(value?: string) {
   return String(value ?? '').trim().toUpperCase();
 }
 
+function normalizeThresholdPct(value: unknown, fallback = DEFAULT_ALERT_THRESHOLD_PCT) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= 100) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
 function inferSiteTypeFromCode(siteCode: string): WarehouseSiteType {
   const normalized = normalizeSiteCode(siteCode);
 
@@ -397,6 +426,57 @@ function getUtilizationPct(item: WarehouseLocationRecord) {
   }
 
   return calculateUtilizationPct(item.usedPalletCapacity, item.palletCapacity);
+}
+
+function resolveAlertThresholdForSite(
+  site: WarehouseSiteRecord,
+  requestThresholdPct?: number
+): WarehouseAlertThresholdRecord {
+  if (typeof requestThresholdPct === 'number' && Number.isFinite(requestThresholdPct)) {
+    const thresholdPct = normalizeThresholdPct(requestThresholdPct);
+
+    return {
+      siteCode: site.siteCode,
+      siteName: site.siteName,
+      siteType: site.siteType,
+      thresholdPct,
+      source: 'request_override'
+    };
+  }
+
+  const override = warehouseAlertThresholdOverrides[site.siteCode];
+  if (override !== undefined) {
+    return {
+      siteCode: site.siteCode,
+      siteName: site.siteName,
+      siteType: site.siteType,
+      thresholdPct: normalizeThresholdPct(override),
+      source: 'site_override'
+    };
+  }
+
+  const byType = DEFAULT_ALERT_THRESHOLD_BY_SITE_TYPE[site.siteType];
+  if (byType !== undefined) {
+    return {
+      siteCode: site.siteCode,
+      siteName: site.siteName,
+      siteType: site.siteType,
+      thresholdPct: normalizeThresholdPct(byType),
+      source: 'site_type_default'
+    };
+  }
+
+  return {
+    siteCode: site.siteCode,
+    siteName: site.siteName,
+    siteType: site.siteType,
+    thresholdPct: DEFAULT_ALERT_THRESHOLD_PCT,
+    source: 'global_default'
+  };
+}
+
+export function listWarehouseAlertThresholds(): WarehouseAlertThresholdRecord[] {
+  return listWarehouseSites().map((site) => resolveAlertThresholdForSite(site));
 }
 
 function normalizeWarehouseLocationRecord(item: WarehouseLocationRecord): WarehouseLocationRecord {
@@ -714,11 +794,10 @@ export function getWarehouseLocationAlerts(filters?: {
   const items = filterWarehouseLocations(normalizedItems, filters);
   const siteScope = normalizeSiteScope(filters?.siteScope);
   const warehouseCode = normalizeWarehouseCodeFilter(filters?.warehouseCode);
-  const thresholdPctRaw = Number(filters?.thresholdPct);
-  const thresholdPct = Number.isFinite(thresholdPctRaw) && thresholdPctRaw > 0 && thresholdPctRaw < 100
-    ? thresholdPctRaw
-    : 80;
+  const requestThresholdPct =
+    filters?.thresholdPct !== undefined ? normalizeThresholdPct(filters.thresholdPct) : undefined;
 
+  const appliedThresholdMap = new Map<string, WarehouseAlertThresholdRecord>();
   const alertItems: WarehouseLocationAlertRecord[] = items
     .filter((item) => item.isActive && item.palletCapacity > 0)
     .map((item) => {
@@ -726,10 +805,13 @@ export function getWarehouseLocationAlerts(filters?: {
         warehouseCode: item.warehouseCode,
         warehouseName: item.warehouseName
       });
+      const threshold = resolveAlertThresholdForSite(site, requestThresholdPct);
+      appliedThresholdMap.set(site.siteCode, threshold);
+
       const utilizationPct = getUtilizationPct(item);
       const remainingCapacity = Math.max(0, item.palletCapacity - item.usedPalletCapacity);
       const severity: WarehouseAlertSeverity | null =
-        utilizationPct >= 100 ? 'full' : utilizationPct >= thresholdPct ? 'near_full' : null;
+        utilizationPct >= 100 ? 'full' : utilizationPct >= threshold.thresholdPct ? 'near_full' : null;
 
       if (!severity) {
         return null;
@@ -739,6 +821,7 @@ export function getWarehouseLocationAlerts(filters?: {
         id: item.id,
         severity,
         utilizationPct,
+        thresholdPctApplied: threshold.thresholdPct,
         siteCode: site.siteCode,
         siteName: site.siteName,
         siteType: site.siteType,
@@ -779,10 +862,13 @@ export function getWarehouseLocationAlerts(filters?: {
   return {
     siteScope,
     warehouseCode: warehouseCode || null,
-    thresholdPct,
+    thresholdPct: requestThresholdPct ?? DEFAULT_ALERT_THRESHOLD_PCT,
     totalAlertLocations: alertItems.length,
     nearFullLocations,
     fullLocations,
+    appliedThresholds: Array.from(appliedThresholdMap.values()).sort((a, b) =>
+      (a.siteCode ?? '').localeCompare(b.siteCode ?? '')
+    ),
     items: alertItems,
     updatedAt: latestUpdatedAt
   };
