@@ -3,6 +3,7 @@ import { created, ok } from '../../common/http/api-response';
 import { asyncHandler } from '../../common/utils/async-handler';
 import { AppError } from '../../common/errors/app-error';
 import {
+  clearWarehouseAlertThreshold,
   createWarehouseLocation,
   exportWarehouseLocationsCsv,
   getWarehouseLocationAlerts,
@@ -10,8 +11,10 @@ import {
   getWarehouseUtilizationDrilldown,
   getWarehouseUtilizationSummary,
   importWarehouseLocationsCsv,
+  listWarehouseAlertThresholds,
   listWarehouseLocations,
   listWarehouseSites,
+  setWarehouseAlertThreshold,
   toggleWarehouseLocationActive,
   updateWarehouseLocation,
   type WarehouseCapacityUom,
@@ -95,6 +98,20 @@ function requiredNumber(value: unknown, field: string, min = 0) {
   return parsed;
 }
 
+function requiredThresholdPct(value: unknown) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= 100) {
+    throw new AppError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message: 'thresholdPct must be a valid number greater than 0 and less than 100'
+    });
+  }
+
+  return parsed;
+}
+
 function normalizeStatus(value: unknown) {
   const status = String(value ?? '').trim().toLowerCase() as WarehouseLocationStatus;
 
@@ -154,6 +171,42 @@ warehouseRouter.get(
       },
       200
     );
+  })
+);
+
+warehouseRouter.get(
+  '/alert-thresholds',
+  asyncHandler(async (_request, response) => {
+    const items = listWarehouseAlertThresholds();
+
+    return ok(
+      response,
+      {
+        items,
+        total: items.length
+      },
+      200
+    );
+  })
+);
+
+warehouseRouter.put(
+  '/alert-thresholds/:siteCode',
+  asyncHandler(async (request, response) => {
+    const siteCode = readSingle(request.params.siteCode as string | string[] | undefined);
+    const thresholdPct = requiredThresholdPct(request.body?.thresholdPct);
+
+    const item = setWarehouseAlertThreshold(siteCode, thresholdPct);
+    return ok(response, item, 200);
+  })
+);
+
+warehouseRouter.delete(
+  '/alert-thresholds/:siteCode',
+  asyncHandler(async (request, response) => {
+    const siteCode = readSingle(request.params.siteCode as string | string[] | undefined);
+    const item = clearWarehouseAlertThreshold(siteCode);
+    return ok(response, item, 200);
   })
 );
 

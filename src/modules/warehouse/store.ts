@@ -479,6 +479,36 @@ export function listWarehouseAlertThresholds(): WarehouseAlertThresholdRecord[] 
   return listWarehouseSites().map((site) => resolveAlertThresholdForSite(site));
 }
 
+export function getWarehouseAlertThreshold(siteCode: string): WarehouseAlertThresholdRecord {
+  const normalizedSiteCode = normalizeSiteCode(siteCode);
+  const matchingSite =
+    listWarehouseSites().find((site) => site.siteCode === normalizedSiteCode) ??
+    {
+      siteCode: normalizedSiteCode,
+      siteName: normalizedSiteCode,
+      siteType: inferSiteTypeFromCode(normalizedSiteCode)
+    };
+
+  return resolveAlertThresholdForSite(matchingSite);
+}
+
+export function setWarehouseAlertThreshold(siteCode: string, thresholdPct: number): WarehouseAlertThresholdRecord {
+  const normalizedSiteCode = normalizeSiteCode(siteCode);
+  const normalizedThreshold = normalizeThresholdPct(thresholdPct);
+
+  warehouseAlertThresholdOverrides[normalizedSiteCode] = normalizedThreshold;
+
+  return getWarehouseAlertThreshold(normalizedSiteCode);
+}
+
+export function clearWarehouseAlertThreshold(siteCode: string): WarehouseAlertThresholdRecord {
+  const normalizedSiteCode = normalizeSiteCode(siteCode);
+
+  delete warehouseAlertThresholdOverrides[normalizedSiteCode];
+
+  return getWarehouseAlertThreshold(normalizedSiteCode);
+}
+
 function normalizeWarehouseLocationRecord(item: WarehouseLocationRecord): WarehouseLocationRecord {
   const site = getWarehouseSiteRecord({
     warehouseCode: item.warehouseCode,
@@ -1230,3 +1260,4 @@ export function importWarehouseLocationsCsv(csvText: string): WarehouseLocationI
     errors
   };
 }
+
