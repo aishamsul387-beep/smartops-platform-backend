@@ -6,6 +6,7 @@ import {
   createWarehouseLocation,
   exportWarehouseLocationsCsv,
   getWarehouseLocationById,
+  getWarehouseUtilizationDrilldown,
   getWarehouseUtilizationSummary,
   importWarehouseLocationsCsv,
   listWarehouseLocations,
@@ -169,6 +170,23 @@ warehouseRouter.get(
     });
 
     return ok(response, summary, 200);
+  })
+);
+
+warehouseRouter.get(
+  '/drilldown',
+  asyncHandler(async (request, response) => {
+    const drilldown = getWarehouseUtilizationDrilldown({
+      search: readSingle(request.query.search as string | string[] | undefined),
+      locationCode: readSingle(request.query.locationCode as string | string[] | undefined),
+      status: readSingle(request.query.status as string | string[] | undefined),
+      type: readSingle(request.query.type as string | string[] | undefined),
+      active: readSingle(request.query.active as string | string[] | undefined),
+      siteScope: readSingle(request.query.siteScope as string | string[] | undefined),
+      warehouseCode: readSingle(request.query.warehouseCode as string | string[] | undefined)
+    });
+
+    return ok(response, drilldown, 200);
   })
 );
 

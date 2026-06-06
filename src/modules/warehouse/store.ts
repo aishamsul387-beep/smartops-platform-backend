@@ -95,6 +95,36 @@ export interface WarehouseUtilizationSummary {
   updatedAt: string;
 }
 
+export interface WarehouseUtilizationDrilldownBucket {
+  key: string;
+  label: string;
+  totalLocations: number;
+  activeLocations: number;
+  inactiveLocations: number;
+  emptyLocations: number;
+  occupiedLocations: number;
+  blockedLocations: number;
+  fullLocations: number;
+  fullLocationPct: number;
+  palletCapacityTotal: number;
+  palletCapacityUsed: number;
+  palletUtilizationPct: number;
+  pcsCapacityTotal: number;
+  pcsCapacityUsed: number;
+  pcsUtilizationPct: number;
+  cartonCapacityTotal: number;
+  cartonCapacityUsed: number;
+  cartonUtilizationPct: number;
+}
+
+export interface WarehouseUtilizationDrilldown {
+  siteScope: WarehouseSiteScope;
+  warehouseCode: string | null;
+  byLocationType: WarehouseUtilizationDrilldownBucket[];
+  byZone: WarehouseUtilizationDrilldownBucket[];
+  updatedAt: string;
+}
+
 let warehouseLocationStore: WarehouseLocationRecord[] = [
   {
     id: 'loc-001',
@@ -418,6 +448,63 @@ function summarizeCapacityByUom(items: WarehouseLocationRecord[], capacityUom: W
   };
 }
 
+function buildDrilldownBucket(key: string, label: string, items: WarehouseLocationRecord): WarehouseUtilizationDrilldownBucket {
+  const totalLocations = items.length;
+  const activeLocations = items.filter((item) => item.isActive).length;
+  const inactiveLocations = totalLocations - activeLocations;
+  const emptyLocations = items.filter((item) => item.status === 'empty').length;
+  const occupiedLocations = items.filter((item) => item.status === 'occupied').length;
+  const blockedLocations = items.filter((item) => item.status === 'blocked').length;
+  const fullLocations = items.filter(isFullLocation).length;
+  const fullLocationBase = activeLocations > 0 ? activeLocations : totalLocations;
+  const fullLocationPct = calculateUtilizationPct(fullLocations, fullLocationBase);
+
+  const palletSummary = summarizeCapacityByUom(items, 'pallet');
+  const pcsSummary = summarizeCapacityByUom(items, 'pcs');
+  const cartonSummary = summarizeCapacityByUom(items, 'carton');
+
+  return {
+    key,
+    label,
+    totalLocations,
+    activeLocations,
+    inactiveLocations,
+    emptyLocations,
+    occupiedLocations,
+    blockedLocations,
+    fullLocations,
+    fullLocationPct,
+    palletCapacityTotal: palletSummary.total,
+    palletCapacityUsed: palletSummary.used,
+    palletUtilizationPct: palletSummary.utilizationPct,
+    pcsCapacityTotal: pcsSummary.total,
+    pcsCapacityUsed: pcsSummary.used,
+    pcsUtilizationPct: pcsSummary.utilizationPct,
+    cartonCapacityTotal: cartonSummary.total,
+    cartonCapacityUsed: cartonSummary.used,
+    cartonUtilizationPct: cartonSummary.utilizationPct
+  };
+}
+
+function createDrilldown(items: WarehouseLocationRecord[], selector: (item: WarehouseLocationRecord) => string) {
+  const groups = new Map<string, WarehouseLocationRecord[]>();
+
+  for (const item of items) {
+    const rawKey = selector(item);
+    const key = String(rawKey ?? '').trim() || 'Unspecified';
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+
+    groups.get(key)!.push(item);
+  }
+
+  return Array.from(groups.entries())
+    .map(([key, groupedItems]) => buildDrilldownBucket(key, key, groupedItems))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 function filterWarehouseLocations(items: WarehouseLocationRecord[], filters?: {
   search?: string;
   locationCode?: string;
@@ -535,6 +622,36 @@ export function getWarehouseUtilizationSummary(filters?: {
     cartonCapacityTotal: cartonSummary.total,
     cartonCapacityUsed: cartonSummary.used,
     cartonUtilizationPct: cartonSummary.utilizationPct,
+    updatedAt: latestUpdatedAt
+  };
+}
+
+export function getWarehouseUtilizationDrilldown(filters?: {
+  search?: string;
+  locationCode?: string;
+  status?: string;
+  type?: string;
+  active?: string;
+  warehouseCode?: string;
+  siteScope?: string;
+}): WarehouseUtilizationDrilldown {
+  const normalizedItems = warehouseLocationStore.map(normalizeWarehouseLocationRecord);
+  const items = filterWarehouseLocations(normalizedItems, filters);
+
+  const siteScope = normalizeSiteScope(filters?.siteScope);
+  const warehouseCode = normalizeWarehouseCodeFilter(filters?.warehouseCode);
+
+  const latestUpdatedAt = items
+    .map((item) => item.updatedAt)
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0] ?? new Date().toISOString();
+
+  return {
+    siteScope,
+    warehouseCode: warehouseCode || null,
+    byLocationType: createDrilldown(items, (item) => item.locationType),
+    byZone: createDrilldown(items, (item) => item.zone),
     updatedAt: latestUpdatedAt
   };
 }
