@@ -1,0 +1,215 @@
+﻿import {
+  getInventoryById,
+  listInventory,
+  type InventoryRecord
+} from './repository';
+
+export interface InventoryLocationBalanceRecord {
+  id: string;
+  inventoryItemId: string;
+  sku: string;
+  itemName: string;
+  warehouseLocation: string;
+  onHandQty: number;
+  reservedQty: number;
+  availableQty: number;
+  unit: string;
+  updatedAt: string;
+}
+
+export interface InventoryTransferRecord {
+  id: string;
+  inventoryItemId: string;
+  sku: string;
+  itemName: string;
+  fromWarehouseLocation: string;
+  toWarehouseLocation: string;
+  quantity: number;
+  reason: string;
+  notes: string;
+  createdAt: string;
+}
+
+let inventoryTransferStore: InventoryTransferRecord[] = [];
+
+function toLocationBalanceRecord(item: InventoryRecord): InventoryLocationBalanceRecord {
+  const onHandQty = Number(item.quantity ?? 0);
+  const reservedQty = 0;
+  const availableQty = Math.max(0, onHandQty - reservedQty);
+
+  return {
+    id: `bal-${item.id}-${String(item.warehouseLocation ?? '').trim().toUpperCase()}`,
+    inventoryItemId: item.id,
+    sku: String(item.sku ?? '').trim(),
+    itemName: String(item.name ?? '').trim(),
+    warehouseLocation: String(item.warehouseLocation ?? '').trim(),
+    onHandQty,
+    reservedQty,
+    availableQty,
+    unit: String(item.unit ?? '').trim(),
+    updatedAt: String(item.updatedAt ?? new Date().toISOString())
+  };
+}
+
+function sortBalances(items: InventoryLocationBalanceRecord[]) {
+  return [...items].sort((a, b) => {
+    if (a.sku !== b.sku) {
+      return a.sku.localeCompare(b.sku);
+    }
+
+    return a.warehouseLocation.localeCompare(b.warehouseLocation);
+  });
+}
+
+function sortTransfers(items: InventoryTransferRecord[]) {
+  return [...items].sort((a, b) => {
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+export async function listInventoryLocationBalances(filters?: {
+  inventoryItemId?: string;
+  search?: string;
+  warehouseLocation?: string;
+}) {
+  const inventoryItems = await listInventory({
+    search: filters?.search ?? '',
+    status: 'all'
+  });
+
+  const balances = inventoryItems
+    .map(toLocationBalanceRecord)
+    .filter((item) => {
+      const matchesInventoryItem =
+        !filters?.inventoryItemId || item.inventoryItemId === filters.inventoryItemId;
+
+      const locationFilter = String(filters?.warehouseLocation ?? '').trim().toLowerCase();
+      const matchesLocation =
+        !locationFilter ||
+        item.warehouseLocation.toLowerCase().includes(locationFilter);
+
+      return matchesInventoryItem && matchesLocation;
+    });
+
+  return sortBalances(balances);
+}
+
+export async function getInventoryLocationBalancesByItem(inventoryItemId: string) {
+  return listInventoryLocationBalances({ inventoryItemId });
+}
+
+export async function getInventoryLocationBalanceSummary() {
+  const balances = await listInventoryLocationBalances();
+
+  const totalLines = balances.length;
+  const totalOnHandQty = balances.reduce((sum, item) => sum + item.onHandQty, 0);
+  const totalAvailableQty = balances.reduce((sum, item) => sum + item.availableQty, 0);
+
+  return {
+    totalLines,
+    totalOnHandQty,
+    totalAvailableQty
+  };
+}
+
+export async function getInventoryLocationBalanceByLocation(
+  inventoryItemId: string,
+  warehouseLocation: string
+) {
+  const normalizedLocation = String(warehouseLocation ?? '').trim().toLowerCase();
+  const balances = await getInventoryLocationBalancesByItem(inventoryItemId);
+
+  return (
+    balances.find(
+      (item) => item.warehouseLocation.trim().toLowerCase() === normalizedLocation
+    ) ?? null
+  );
+}
+
+export function listInventoryTransfers(filters?: {
+  inventoryItemId?: string;
+  search?: string;
+  warehouseLocation?: string;
+}) {
+  const normalizedSearch = String(filters?.search ?? '').trim().toLowerCase();
+  const normalizedLocation = String(filters?.warehouseLocation ?? '').trim().toLowerCase();
+
+  const items = inventoryTransferStore.filter((item) => {
+    const matchesInventoryItem =
+      !filters?.inventoryItemId || item.inventoryItemId === filters.inventoryItemId;
+
+    const matchesSearch =
+      !normalizedSearch ||
+      item.sku.toLowerCase().includes(normalizedSearch) ||
+      item.itemName.toLowerCase().includes(normalizedSearch) ||
+      item.fromWarehouseLocation.toLowerCase().includes(normalizedSearch) ||
+      item.toWarehouseLocation.toLowerCase().includes(normalizedSearch) ||
+      item.reason.toLowerCase().includes(normalizedSearch);
+
+    const matchesLocation =
+      !normalizedLocation ||
+      item.fromWarehouseLocation.toLowerCase().includes(normalizedLocation) ||
+      item.toWarehouseLocation.toLowerCase().includes(normalizedLocation);
+
+    return matchesInventoryItem && matchesSearch && matchesLocation;
+  });
+
+  return sortTransfers(items);
+}
+
+export function getInventoryTransferById(id: string) {
+  return inventoryTransferStore.find((item) => item.id === id) ?? null;
+}
+
+export async function createInventoryTransferDraft(input: {
+  inventoryItemId: string;
+  fromWarehouseLocation: string;
+  toWarehouseLocation: string;
+  quantity: number;
+  reason: string;
+  notes?: string;
+}) {
+  const inventoryItem = await getInventoryById(input.inventoryItemId);
+
+  if (!inventoryItem) {
+    throw new Error('Inventory item not found');
+  }
+
+  const quantity = Number(input.quantity);
+
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error('quantity must be greater than 0');
+  }
+
+  const fromWarehouseLocation = String(input.fromWarehouseLocation ?? '').trim();
+  const toWarehouseLocation = String(input.toWarehouseLocation ?? '').trim();
+
+  if (!fromWarehouseLocation) {
+    throw new Error('fromWarehouseLocation is required');
+  }
+
+  if (!toWarehouseLocation) {
+    throw new Error('toWarehouseLocation is required');
+  }
+
+  if (fromWarehouseLocation.toLowerCase() === toWarehouseLocation.toLowerCase()) {
+    throw new Error('fromWarehouseLocation and toWarehouseLocation must be different');
+  }
+
+  const availableSourceBalance =
+    (await getInventoryLocationBalanceByLocation(input.inventoryItemId, fromWarehouseLocation)) ??
+    null;
+
+  return {
+    inventoryItemId: inventoryItem.id,
+    sku: inventoryItem.sku,
+    itemName: inventoryItem.name,
+    unit: inventoryItem.unit,
+    quantity,
+    fromWarehouseLocation,
+    toWarehouseLocation,
+    reason: String(input.reason ?? '').trim(),
+    notes: String(input.notes ?? '').trim(),
+    availableSourceBalance
+  };
+}

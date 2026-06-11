@@ -1,0 +1,10 @@
+﻿Please patch this file manually:
+
+FILE:
+C:\Users\HP\OneDrive\Desktop\SmartOpsAI\mobile-app\smartops-supply-web\backend\src\modules\stock-control\routes.ts
+
+ADD IMPORT:
+import h11bIssueRouter from './h11b-issue-routes';
+
+ADD BEFORE EXPORT:
+router.use('/issues-h11b', h11bIssueRouter);

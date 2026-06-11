@@ -14,14 +14,10 @@ import {
 } from './repository';
 import { listConversionGroups, listUoms } from '../uom/store';
 import {
-  commitInventoryTransfer,
   createInventoryTransferDraft,
   getInventoryLocationBalanceSummary,
   getInventoryLocationBalancesByItem,
-  getInventoryTransferById,
-  listInventoryLocationBalances,
-  listInventoryTransfers,
-  suggestInventoryTransferSource
+  listInventoryLocationBalances
 } from './location-balance-store';
 
 export const inventoryRouter = Router();
@@ -290,94 +286,6 @@ inventoryRouter.get(
   })
 );
 
-
-inventoryRouter.post(
-  '/transfers/commit',
-  asyncHandler(async (request, response) => {
-    const inventoryItemId = requireText(request.body?.inventoryItemId, 'inventoryItemId', 1, 80);
-    const fromWarehouseLocation = requireText(
-      request.body?.fromWarehouseLocation,
-      'fromWarehouseLocation',
-      1,
-      80
-    );
-    const toWarehouseLocation = requireText(
-      request.body?.toWarehouseLocation,
-      'toWarehouseLocation',
-      1,
-      80
-    );
-    const quantity = requireNumber(request.body?.quantity, 'quantity', 0.0001);
-    const reason = requireText(request.body?.reason, 'reason', 1, 120);
-    const notes = optionalText(request.body?.notes, 250);
-
-    const result = await commitInventoryTransfer({
-      inventoryItemId,
-      fromWarehouseLocation,
-      toWarehouseLocation,
-      quantity,
-      reason,
-      notes
-    });
-
-    return created(response, result);
-  })
-);
-
-inventoryRouter.get(
-  '/transfers',
-  asyncHandler(async (request, response) => {
-    const items = listInventoryTransfers({
-      inventoryItemId: readSingle(request.query.inventoryItemId as string | string[] | undefined),
-      search: readSingle(request.query.search as string | string[] | undefined),
-      warehouseLocation: readSingle(request.query.warehouseLocation as string | string[] | undefined)
-    });
-
-    return ok(
-      response,
-      {
-        items,
-        total: items.length
-      },
-      200
-    );
-  })
-);
-
-inventoryRouter.get(
-  '/transfers/:id',
-  asyncHandler(async (request, response) => {
-    const id = readSingle(request.params.id as string | string[] | undefined);
-    const item = getInventoryTransferById(id);
-
-    if (!item) {
-      throw new AppError({
-        status: 404,
-        code: 'INVENTORY_TRANSFER_NOT_FOUND',
-        message: 'Inventory transfer not found'
-      });
-    }
-
-    return ok(response, item, 200);
-  })
-);
-
-
-inventoryRouter.post(
-  '/transfers/suggest-source',
-  asyncHandler(async (request, response) => {
-    const inventoryItemId = requireText(request.body?.inventoryItemId, 'inventoryItemId', 1, 80);
-    const quantity = requireNumber(request.body?.quantity, 'quantity', 0.0001);
-
-    const suggestion = await suggestInventoryTransferSource({
-      inventoryItemId,
-      quantity
-    });
-
-    return ok(response, suggestion, 200);
-  })
-);
-
 inventoryRouter.post(
   '/transfers/draft',
   asyncHandler(async (request, response) => {
@@ -498,7 +406,3 @@ inventoryRouter.patch(
     return ok(response, item, 200);
   })
 );
-
-
-
-
